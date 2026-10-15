@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="th">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Group CRM Demo</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans+Thai:wght@400;500;600&family=Prompt:wght@500;600;700&display=swap">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<header class="top">
+  <div class="logo">
+    <span class="logo-mark" aria-hidden="true"><i style="background:#1F5A85"></i><i style="background:#2F6B4F"></i><i style="background:#C7481A"></i></span>
+    <span><b>Group CRM</b><small>LINE OA หลายแบรนด์ หลายสาขา · เดโม</small></span>
+  </div>
+  <nav class="tabs" aria-label="มุมมอง">
+    <button data-view="customer" aria-selected="true">ลูกค้า (LINE)</button>
+    <button data-view="pos" aria-selected="false">หน้าร้าน POS</button>
+    <button data-view="admin" aria-selected="false">หลังบ้าน</button>
+  </nav>
+  <span class="spacer"></span>
+  <button class="btn small" id="reset">รีเซ็ตเดโม</button>
+</header>
+<main class="wrap" id="view"></main>
+<script src="store.js"></script>
+<script src="common.js"></script>
+<script src="customer.js"></script>
+<script src="pos.js"></script>
+<script src="admin.js"></script>
+<script src="main.js"></script>
+</body>
+</html>
