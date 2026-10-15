@@ -252,29 +252,29 @@
     'a.page': (el) => { ui.page = el.dataset.p; ui.member = null; },
     'a.scope': (el) => { ui.scope = el.dataset.s; ui.member = null; },
     'a.member': (el) => { ui.member = el.dataset.id || null; setTimeout(() => { const d = document.getElementById('member-detail'); if (d) d.scrollIntoView({ block: 'start' }); }, 0); },
-    'a.adj': () => {
+    'a.adj': async () => {
       const pts = parseInt(ui.adj.pts, 10);
       if (!pts || !ui.adj.reason.trim()) { toast('ใส่จำนวนแต้มและเหตุผลก่อนส่ง'); return; }
-      API.requestAdjust({ memberId: ui.member, brand: ui.adj.brand, branch: null, pts, reason: ui.adj.reason.trim(), by: by() });
+      await API.requestAdjust({ memberId: ui.member, brand: ui.adj.brand, branch: null, pts, reason: ui.adj.reason.trim(), by: by() });
       ui.adj.pts = ''; ui.adj.reason = ''; toast('ส่งคำขอแล้ว ต้องให้ผู้ใช้อีกคนอนุมัติ');
     },
-    'a.decide': (el) => { API.decide(el.dataset.id, el.dataset.ok === '1', by()); toast(el.dataset.ok === '1' ? 'อนุมัติแล้ว แต้มเข้า ledger' : 'ปฏิเสธคำขอแล้ว'); },
+    'a.decide': async (el) => { await API.decide(el.dataset.id, el.dataset.ok === '1', by()); toast(el.dataset.ok === '1' ? 'อนุมัติแล้ว แต้มเข้า ledger' : 'ปฏิเสธคำขอแล้ว'); },
     'a.rb': (el) => { ui.ruleBrand = el.dataset.b; },
-    'a.saverule': () => {
+    'a.saverule': async () => {
       const r = { baht: num('r-baht'), pts: num('r-pts'), base: document.getElementById('r-base').value, rounding: document.getElementById('r-round').value, expiryMonths: num('r-exp'), welcome: num('r-wel'), backdays: num('r-back'),
         tiers: { gold: num('r-gold'), platinum: num('r-plat') }, promo: { on: document.getElementById('r-promo').checked, mult: num('r-mult'), day: num('r-day') } };
       if (r.baht < 1 || r.pts < 0) { toast('อัตราแต้มไม่ถูกต้อง'); return; }
-      API.saveRule(ui.ruleBrand, r, by()); toast('บันทึกกฎแต้ม ' + R.brands[ui.ruleBrand].short + ' แล้ว');
+      await API.saveRule(ui.ruleBrand, r, by()); toast('บันทึกกฎแต้ม ' + R.brands[ui.ruleBrand].short + ' แล้ว');
     },
-    'a.rwtoggle': (el) => { const r = R.state().rewards.find((x) => x.id === el.dataset.id); API.saveReward(Object.assign({}, r, { active: !r.active }), by()); },
-    'a.addreward': () => {
+    'a.rwtoggle': async (el) => { const r = R.state().rewards.find((x) => x.id === el.dataset.id); await API.saveReward(Object.assign({}, r, { active: !r.active }), by()); },
+    'a.addreward': async () => {
       const w = ui.rw;
       if (!w.name.trim() || !(Number(w.cost) > 0)) { toast('ใส่ชื่อรางวัลและจำนวนแต้มที่ใช้'); return; }
-      API.saveReward({ brand: w.brand, name: w.name.trim(), cost: Number(w.cost), cat: w.cat, stock: Number(w.stock) || 0, active: true, cp: { kind: 'baht', value: Number(w.value) || 0, min: 0 } }, by());
+      await API.saveReward({ brand: w.brand, name: w.name.trim(), cost: Number(w.cost), cat: w.cat, stock: Number(w.stock) || 0, active: true, cp: { kind: 'baht', value: Number(w.value) || 0, min: 0 } }, by());
       ui.rw = { brand: w.brand, name: '', cost: '', cat: 'food', value: '', stock: '100' }; toast('เพิ่มรางวัลแล้ว ลูกค้าเห็นในหน้าแลกแต้มทันที');
     },
-    'a.send': () => { const bc = API.broadcast(Object.assign({}, ui.bc), by()); toast('ส่งแคมเปญ ' + bc.id + ' ถึง ' + bc.recipients + ' คน'); },
-    'a.earn': (el) => API.toggleBranchEarn(el.dataset.id, by())
+    'a.send': async () => { const bc = await API.broadcast(Object.assign({}, ui.bc), by()); toast('ส่งแคมเปญ ' + bc.id + ' ถึง ' + bc.recipients + ' คน'); },
+    'a.earn': async (el) => API.toggleBranchEarn(el.dataset.id, by())
   };
 
   window.VIEWS = window.VIEWS || {};

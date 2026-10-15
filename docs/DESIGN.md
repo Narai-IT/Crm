@@ -43,14 +43,14 @@ flowchart TB
   ADMIN -- "SSO + RBAC" --> API
 
   subgraph Backend["Central Backend"]
-    API["REST API (NestJS)"]
+    API["REST API (Node.js)"]
     LOY["Loyalty Engine\nกฎแต้ม · ระดับ · ledger"]
     CPN["Coupon Engine"]
     MKT["Campaign / Segment"]
     WRK["Worker: Outbox → LINE push/multicast,\nแต้มหมดอายุ, คำนวณระดับ"]
   end
   API --> LOY & CPN & MKT
-  API & WRK --> DB[("SQL Server · schema crm")]
+  API & WRK --> DB[("PostgreSQL · schema crm")]
   WRK -- "token ของ OA แบรนด์นั้น" --> LINE
 ```
 
@@ -58,8 +58,8 @@ flowchart TB
 |---|---|---|
 | LIFF ลูกค้า | React + LIFF SDK (หรือ LINE MINI App) | เดโมเขียนเป็น HTML/JS ล้วน เพื่อให้เปิดดูได้ทันที |
 | Admin / เว็บพนักงาน | React + ตารางข้อมูล | ล็อกอินด้วย LINE Login หรืออีเมลองค์กร |
-| API | Node.js / NestJS | ตรวจสิทธิ์ทุก endpoint ฝั่ง server |
-| ฐานข้อมูล | SQL Server (schema `crm` แยกจาก `dbo` ของ POS เดิม) | ดู [`db/schema.sql`](../db/schema.sql) · ถ้าใช้ Express ระวังเพดาน 10 GB |
+| API | Node.js (node:http + `pg`) | ตรวจสิทธิ์ทุก endpoint ฝั่ง server · โค้ดอยู่ใน [`server/`](../server/README.md) |
+| ฐานข้อมูล | PostgreSQL 16 (schema `crm` แยกจากฐานข้อมูล POS เดิม) | ดู [`server/db/migrations`](../server/db/migrations/001_init.sql) · POS ส่งข้อมูลผ่าน API ไม่ต่อฐานข้อมูลตรง |
 | คิว | Outbox table + worker (หรือ Redis/BullMQ) | ส่ง LINE หลัง commit เท่านั้น, retry ได้ |
 | Secret | Key Vault / env | channel secret & token แยกต่อ OA |
 
@@ -198,7 +198,10 @@ follow event → หา `MemberLineIdentities` จาก userId → พบ → �
 
 ## 9. เดโมในโปรเจกต์นี้
 
-เปิด `demo/index.html` ได้เลย ไม่ต้อง build (ข้อมูลจำลองเก็บใน localStorage ของเบราว์เซอร์ กด "รีเซ็ตเดโม" เพื่อเริ่มใหม่)
+เปิดได้ 2 แบบ:
+
+- **เดโมล้วน**: เปิด `demo/index.html` ได้เลย ข้อมูลจำลองเก็บใน localStorage ของเบราว์เซอร์ (กด "รีเซ็ตเดโม" เพื่อเริ่มใหม่)
+- **ต่อฐานข้อมูลจริง**: รัน `server/` (ดู [server/README.md](../server/README.md)) แล้วเปิด http://localhost:3000 หน้าเดียวกันจะบันทึกลง PostgreSQL ผ่าน API จริง
 
 | แท็บ | ลองทำ |
 |---|---|

@@ -277,35 +277,36 @@
     'c.copy': (el) => { const t = el.dataset.text; try { navigator.clipboard.writeText(t).then(() => toast('คัดลอก ' + t + ' แล้ว'), () => toast('เลขสมาชิก ' + t)); } catch (e) { toast('เลขสมาชิก ' + t); } },
     'c.code': (el) => { ui.showCode = ui.showCode === el.dataset.id ? null : el.dataset.id; },
     'c.ctab': (el) => { ui.couponTab = el.dataset.t; ui.showCode = null; },
-    'c.addcode': () => { const r = API.addCode(R.demoMember().id, ui.brand, ui.code); if (r.ok) { ui.code = ''; ui.couponTab = 'ready'; toast('เพิ่มคูปองเข้ากระเป๋าแล้ว'); } else toast(r.msg); },
+    'c.addcode': async () => { const r = await API.addCode(R.demoMember().id, ui.brand, ui.code); if (r.ok) { ui.code = ''; ui.couponTab = 'ready'; toast('เพิ่มคูปองเข้ากระเป๋าแล้ว'); } else toast(r.msg); },
     'c.rcat': (el) => { ui.rcat = el.dataset.cat; },
     'c.pick': (el) => { ui.pick = el.dataset.id; },
     'c.unpick': () => { ui.pick = null; },
-    'c.redeem': () => { const r = API.redeem(R.demoMember().id, ui.pick); ui.pick = null; if (r.ok) { ui.tab = 'coupons'; ui.couponTab = 'ready'; ui.showCode = r.coupon.id; toast('แลกสำเร็จ ได้คูปอง ' + r.coupon.title); } else toast(r.msg); },
+    'c.redeem': async () => { const r = await API.redeem(R.demoMember().id, ui.pick); ui.pick = null; if (r.ok) { ui.tab = 'coupons'; ui.couponTab = 'ready'; ui.showCode = r.coupon.id; toast('แลกสำเร็จ ได้คูปอง ' + r.coupon.title); } else toast(r.msg); },
     'c.hmode': (el) => { ui.histMode = el.dataset.m; },
     'c.bill': (el) => { ui.openBill = ui.openBill === el.dataset.id ? null : el.dataset.id; },
     'c.tax': () => toast('ส่งคำขอใบกำกับภาษีแล้ว (เดโม) · จริง: ดึงข้อมูลจาก TaxCustomers แล้วส่ง PDF ทางแชท'),
-    'c.consent': (el) => API.setConsent(R.demoMember().id, el.dataset.brand, el.checked),
-    'c.otp': () => { if (!/^0\d{8,9}$/.test(ui.reg.phone)) { ui.reg.err = 'กรอกเบอร์โทร 10 หลักที่ขึ้นต้นด้วย 0'; return; } ui.reg.otpSent = true; API.sendOtp(ui.reg.phone); },
-    'c.register': () => {
+    'c.consent': async (el) => API.setConsent(R.demoMember().id, el.dataset.brand, el.checked),
+    'c.otp': async () => { if (!/^0\d{8,9}$/.test(ui.reg.phone)) { ui.reg.err = 'กรอกเบอร์โทร 10 หลักที่ขึ้นต้นด้วย 0'; return; } ui.reg.otpSent = true; const o = await API.sendOtp(ui.reg.phone); if (o && o.devCode) { ui.reg.otp = o.devCode; toast('โหมดทดสอบ: ระบบกรอก OTP ' + o.devCode + ' ให้แล้ว (ใช้จริงจะส่ง SMS)'); } },
+    'c.register': async () => {
       const r = ui.reg; const brs = R.state().branches.filter((x) => x.brand === ui.brand);
       if (!r.name.trim()) { r.err = 'กรอกชื่อ - นามสกุล'; return; }
       if (!/^0\d{8,9}$/.test(r.phone)) { r.err = 'กรอกเบอร์โทร 10 หลักที่ขึ้นต้นด้วย 0'; return; }
       if (!r.otpSent || r.otp.length < 4) { r.err = 'กดขอ OTP แล้วใส่รหัสที่ได้รับ'; return; }
       if (!r.privacy) { r.err = 'ต้องยอมรับเงื่อนไขสมาชิกและนโยบายความเป็นส่วนตัวก่อนสมัคร'; return; }
-      const res = API.register(ui.brand, { name: r.name.trim(), phone: r.phone, birthday: r.birthday, branch: r.branch || brs[0].id, mkt: r.mkt });
+      const res = await API.register(ui.brand, { name: r.name.trim(), phone: r.phone, otp: r.otp, birthday: r.birthday, branch: r.branch || brs[0].id, mkt: r.mkt });
       ui.regDone = { id: res.member.id, linked: res.linked };
     },
     'c.regdone': () => { ui.regDone = null; ui.tab = 'home'; },
     'c.clearlog': () => API.clearLog()
   };
 
+  let lastQr = null;
   // นับถอยหลัง QR ทุกวินาที โดยไม่ render ทั้งหน้า
   setInterval(() => {
     const el = document.getElementById('qr-left'); const m = R.demoMember();
     if (!el || !m) return;
     const q = R.qrToken(m.id); el.textContent = q.left;
-    if (q.left === 60 && ui.qrMode === 'qr') document.getElementById('qr-img').innerHTML = qrSvg(q.token, 172, 'QR สมาชิก ' + m.id);
+    if (q.token !== lastQr && ui.qrMode === 'qr') { lastQr = q.token; const box = document.getElementById('qr-img'); if (box) box.innerHTML = qrSvg(q.token, 172, 'QR สมาชิก ' + m.id); }
   }, 1000);
 
   window.VIEWS = window.VIEWS || {};

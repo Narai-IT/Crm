@@ -156,7 +156,7 @@
     try { const raw = localStorage.getItem(KEY); if (raw) { const s = JSON.parse(raw); if (s && s.v === 1) return s; } } catch (e) { /* ignore */ }
     return seed();
   }
-  function save() { try { localStorage.setItem(KEY, JSON.stringify(st)); } catch (e) { /* ignore */ } }
+  function save() { if (st.live) return; try { localStorage.setItem(KEY, JSON.stringify(st)); } catch (e) { /* ignore */ } }
   st = load();
 
   const listeners = [];
@@ -408,5 +408,6 @@
   };
   function mask(p) { p = String(p || ''); return p.length > 4 ? '***-***-' + p.slice(-4) : p; }
 
-  window.CRM = { R, API, DAY, mask };
+  // live.js ใช้ 2 ตัวนี้สลับไปใช้ข้อมูลจาก PostgreSQL ผ่าน server
+  window.CRM = { R, API, DAY, mask, _setState: (s) => { st = s; }, _notify: () => listeners.forEach((f) => f()) };
 })();

@@ -138,30 +138,30 @@
 
   const act = {
     'p.mode': (el) => { ui.mode = el.dataset.m; },
-    'p.find': () => { const m = API.resolve(ui.query, { branch: ui.branch }); if (m) { ui.memberId = m.id; ui.picked = {}; toast('พบสมาชิก ' + m.id); } else toast('ไม่พบสมาชิก ลองเลขสมาชิกหรือเบอร์โทรอีกครั้ง'); },
-    'p.scan': () => {
+    'p.find': async () => { const m = await API.resolve(ui.query, { branch: ui.branch }); if (m) { ui.memberId = m.id; ui.picked = {}; toast('พบสมาชิก ' + m.id); } else toast('ไม่พบสมาชิก ลองเลขสมาชิกหรือเบอร์โทรอีกครั้ง'); },
+    'p.scan': async () => {
       const dm = R.demoMember();
       if (!dm) { toast('มือถือเดโมยังไม่ได้สมัครสมาชิก ไปแท็บ "ลูกค้า (LINE)" ก่อน'); return; }
-      const m = API.resolve(R.qrToken(dm.id).token, { branch: ui.branch });
+      const m = await API.resolve(R.qrToken(dm.id).token, { branch: ui.branch });
       if (m) { ui.memberId = m.id; ui.picked = {}; toast('สแกนสำเร็จ ' + m.id); }
     },
     'p.clearm': () => { ui.memberId = null; ui.picked = {}; ui.query = ''; },
     'p.cp': (el) => { ui.picked[el.dataset.id] = el.checked; },
     'p.add': (el) => addItem(ui.cart, el.dataset.id),
     'p.dec': (el) => { const r = ui.cart.find((x) => x.id === el.dataset.id); if (r) { r.qty--; if (!r.qty) ui.cart.splice(ui.cart.indexOf(r), 1); } },
-    'p.close': () => {
+    'p.close': async () => {
       const ids = Object.keys(ui.picked).filter((k) => ui.picked[k]);
-      const bill = API.closeBill({ branch: ui.branch, memberId: ui.memberId, items: ui.cart, couponIds: ids, staff: staffName(), channel: 'pos' });
+      const bill = await API.closeBill({ branch: ui.branch, memberId: ui.memberId, items: ui.cart, couponIds: ids, staff: staffName(), channel: 'pos' });
       ui.last = bill.id; ui.cart = []; ui.picked = {};
       toast(bill.memberId ? 'ปิดบิลแล้ว +' + bill.pts + ' แต้ม · ส่ง Flex แจ้งลูกค้าทาง OA ' + brand().short : 'ปิดบิลแล้ว (ไม่ระบุสมาชิก)');
       if (bill.memberId) ui.memberId = null;
     },
-    'p.retry': () => { API.retryBill(ui.last); toast('Server ตอบ 200: บิลนี้บันทึกแล้ว ไม่ให้แต้มซ้ำ'); },
-    'p.refund': (el) => { API.refund(el.dataset.id, staffName()); toast('คืนเงินแล้ว · หักแต้มคืนและคืนคูปองให้ลูกค้า'); },
-    'p.adj': () => {
+    'p.retry': async () => { await API.retryBill(ui.last); toast('Server ตอบ 200: บิลนี้บันทึกแล้ว ไม่ให้แต้มซ้ำ'); },
+    'p.refund': async (el) => { await API.refund(el.dataset.id, staffName()); toast('คืนเงินแล้ว · หักแต้มคืนและคืนคูปองให้ลูกค้า'); },
+    'p.adj': async () => {
       const pts = parseInt(ui.adj.pts, 10);
       if (!pts || !ui.adj.reason.trim()) { toast('ใส่จำนวนแต้มและเหตุผลก่อนส่ง'); return; }
-      API.requestAdjust({ memberId: ui.memberId, brand: br().brand, branch: ui.branch, pts, reason: ui.adj.reason.trim(), by: staffName() });
+      await API.requestAdjust({ memberId: ui.memberId, brand: br().brand, branch: ui.branch, pts, reason: ui.adj.reason.trim(), by: staffName() });
       ui.adj = { pts: '', reason: '' }; toast('ส่งคำขอแล้ว รอผู้จัดการอนุมัติในหลังบ้าน');
     },
     'k.restart': () => { ui.k = { step: 'start', dining: 'dine', mode: 'id', input: '', error: false, memberId: null, used: {}, cart: [] }; },
@@ -172,17 +172,17 @@
       const k = ui.k; const v = el.dataset.k; const max = k.mode === 'id' ? 7 : 10; k.error = false;
       if (v === 'ล้าง') k.input = ''; else if (v === '⌫') k.input = k.input.slice(0, -1); else if (k.input.length < max) k.input += v;
     },
-    'k.lookup': () => {
-      const k = ui.k; const m = API.resolve(k.mode === 'id' ? 'MB-' + k.input : k.input, { branch: ui.branch });
+    'k.lookup': async () => {
+      const k = ui.k; const m = await API.resolve(k.mode === 'id' ? 'MB-' + k.input : k.input, { branch: ui.branch });
       if (m) { k.memberId = m.id; k.step = 'found'; k.used = {}; } else k.error = true;
     },
     'k.cp': (el) => { ui.k.used[el.dataset.id] = el.checked; },
     'k.menu': () => { ui.k.step = 'menu'; },
     'k.notme': () => { Object.assign(ui.k, { step: 'member', input: '', memberId: null, error: false, used: {} }); },
     'k.add': (el) => addItem(ui.k.cart, el.dataset.id),
-    'k.send': () => {
+    'k.send': async () => {
       const k = ui.k; const ids = Object.keys(k.used).filter((x) => k.used[x]);
-      const bill = API.closeBill({ branch: ui.branch, memberId: k.memberId, items: k.cart, couponIds: k.memberId ? ids : [], staff: 'kiosk', channel: 'kiosk' });
+      const bill = await API.closeBill({ branch: ui.branch, memberId: k.memberId, items: k.cart, couponIds: k.memberId ? ids : [], staff: 'kiosk', channel: 'kiosk' });
       k.step = 'done'; k.cart = [];
       toast(bill.memberId ? 'บิล ' + bill.id + ' +' + bill.pts + ' แต้ม' : 'บิล ' + bill.id + ' (ไม่ระบุสมาชิก)');
     }

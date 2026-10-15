@@ -1,0 +1,58 @@
+// router เล็ก ๆ บน node:http (ไม่ต้องพึ่ง framework)
+import { readFile, stat } from 'node:fs/promises';
+import { extname, join, normalize } from 'node:path';
+
+export class HttpError extends Error {
+  constructor(status, code, message) { super(message || code); this.status = status; this.code = code; }
+}
+export const bad = (code, msg) => new HttpError(400, code, msg);
+export const notFound = (msg) => new HttpError(404, 'not_found', msg || 'ไม่พบข้อมูล');
+export const forbidden = (msg) => new HttpError(403, 'forbidden', msg || 'ไม่มีสิทธิ์');
+export const conflict = (code, msg) => new HttpError(409, code, msg);
+
+export function createRouter() {
+  const routes = [];
+  const add = (method) => (path, ...handlers) => {
+    const keys = [];
+    const re = new RegExp('^' + path.replace(/:(\w+)/g, (_, k) => { keys.push(k); return '([^/]+)'; }) + '/?$');
+    routes.push({ method, re, keys, handlers });
+  };
+  return {
+    get: add('GET'), post: add('POST'), put: add('PUT'), patch: add('PATCH'), del: add('DELETE'),
+    match(method, path) {
+      for (const r of routes) {
+        if (r.method !== method) continue;
+        const m = r.re.exec(path);
+        if (m) return { handlers: r.handlers, params: Object.fromEntries(r.keys.map((k, i) => [k, decodeURIComponent(m[i + 1])])) };
+      }
+      return null;
+    }
+  };
+}
+
+export async function readBody(req, limit = 1e6) {
+  const chunks = []; let size = 0;
+  for await (const c of req) { size += c.length; if (size > limit) throw new HttpError(413, 'too_large'); chunks.push(c); }
+  return Buffer.concat(chunks);
+}
+
+export function send(res, status, body, headers = {}) {
+  const data = body === undefined ? '' : JSON.stringify(body);
+  res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store', ...headers });
+  res.end(data);
+}
+
+const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.json': 'application/json', '.png': 'image/png', '.svg': 'image/svg+xml', '.ico': 'image/x-icon' };
+export async function serveStatic(root, urlPath, res) {
+  const rel = normalize(decodeURIComponent(urlPath)).replace(/^([/\\])+/, '');
+  if (rel.startsWith('..')) return false;
+  let file = join(root, rel || 'index.html');
+  try {
+    const s = await stat(file);
+    if (s.isDirectory()) file = join(file, 'index.html');
+    const data = await readFile(file);
+    res.writeHead(200, { 'content-type': MIME[extname(file)] || 'application/octet-stream', 'cache-control': 'no-cache' });
+    res.end(data);
+    return true;
+  } catch { return false; }
+}

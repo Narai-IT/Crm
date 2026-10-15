@@ -22,19 +22,25 @@
     render(); window.scrollTo(0, 0);
   }
 
-  document.addEventListener('click', (e) => {
+  let busy = false;
+  document.addEventListener('click', async (e) => {
     const t = e.target.closest('[data-view]');
     if (t) { go(t.dataset.view); return; }
-    if (e.target.closest('#reset')) { API.reset(); Object.assign(V.customer.ui, { screen: 'chat', tab: 'home', regDone: null, pick: null, reg: { name: '', phone: '', otpSent: false, otp: '', birthday: '', branch: '', privacy: false, mkt: true, err: '' } }); V.pos.ui.memberId = null; V.pos.ui.cart = []; V.pos.ui.last = null; V.admin.ui.member = null; if (V[cur].enter) V[cur].enter(); render(); window.U.toast('รีเซ็ตข้อมูลเดโมแล้ว'); return; }
+    if (e.target.closest('#reset')) { try { await API.reset(); } catch (err) { window.U.toast(err.message); return; } Object.assign(V.customer.ui, { screen: 'chat', tab: 'home', regDone: null, pick: null, reg: { name: '', phone: '', otpSent: false, otp: '', birthday: '', branch: '', privacy: false, mkt: true, err: '' } }); V.pos.ui.memberId = null; V.pos.ui.cart = []; V.pos.ui.last = null; V.admin.ui.member = null; if (V[cur].enter) V[cur].enter(); render(); window.U.toast('รีเซ็ตข้อมูลเดโมแล้ว'); return; }
     const el = e.target.closest('[data-act]');
     if (!el || el.disabled) return;
     const name = el.dataset.act; const view = V[prefix[name.split('.')[0]]];
-    if (view && view.act[name]) { view.act[name](el, e); render(); }
+    if (view && view.act[name]) {
+      if (busy) return;
+      busy = true;
+      try { await view.act[name](el, e); } catch (err) { window.U.toast(err.message || 'เกิดข้อผิดพลาด'); } finally { busy = false; }
+      render();
+    }
   });
   document.addEventListener('keydown', (e) => {
     if (e.key !== 'Enter') return;
     const el = e.target.closest('tr[data-act]'); if (el) { el.click(); return; }
-    if (e.target.id === 'p-q') { V.pos.act['p.find'](); render(); }
+    if (e.target.id === 'p-q') { Promise.resolve(V.pos.act['p.find']()).catch((err) => window.U.toast(err.message)).then(render); }
   });
   function onModel(e) {
     const el = e.target;
@@ -55,5 +61,5 @@
   let start = 'customer';
   const h = location.hash.replace('#', '');
   if (views.includes(h)) start = h; else { try { start = localStorage.getItem('crm-demo-view') || 'customer'; } catch (e) { /* ignore */ } }
-  go(start);
+  (window.CRM.ready || Promise.resolve()).then(() => go(start));
 })();

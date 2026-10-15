@@ -1,0 +1,18 @@
+# ทางเลือก: รัน PostgreSQL ด้วย Docker แทนการติดตั้งลงเครื่อง
+#   docker compose up -d
+# แล้วตั้ง DATABASE_URL=postgres://crm_app:crm_dev_password@localhost:5432/crm ใน .env
+services:
+  db:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: crm
+      POSTGRES_USER: crm_app
+      POSTGRES_PASSWORD: crm_dev_password
+      TZ: Asia/Bangkok
+    ports:
+      - "5432:5432"
+    volumes:
+      - crm_pg:/var/lib/postgresql/data
+volumes:
+  crm_pg:

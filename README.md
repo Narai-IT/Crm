@@ -7,6 +7,18 @@
   - **หน้าร้าน POS**: เครื่องแคชเชียร์ (สแกน QR, ใช้คูปอง, ปิดบิล, คืนเงิน, ขอแต้มย้อนหลัง) และ Kiosk สั่งเองที่โต๊ะ
   - **หลังบ้าน**: ภาพรวม KPI, สมาชิก 360°, อนุมัติแต้ม, กฎแต้ม, รางวัล, แคมเปญ, LINE OA, สาขา, สิทธิ์, Audit Log
 - [`docs/DESIGN.md`](docs/DESIGN.md): สถาปัตยกรรม การตั้งค่า LINE หน้าจอ API ลำดับการทำงาน และกรณีพิเศษ
-- [`db/schema.sql`](db/schema.sql): โครงสร้างฐานข้อมูล SQL Server (schema `crm`) พร้อม stored procedure สะสมแต้มแบบ atomic + idempotent
+- [`server/`](server/README.md): backend ใช้งานจริงบน **PostgreSQL** (REST API, LINE webhook, งานส่งข้อความ/แต้มหมดอายุ) พร้อมวิธีติดตั้งบนเครื่อง และชุดทดสอบอัตโนมัติ
+
+## เริ่มใช้แบบต่อฐานข้อมูลจริง (บนเครื่อง)
+
+```bash
+cd server
+cp .env.example .env      # แก้ DATABASE_URL ให้ตรงกับเครื่อง
+npm install
+npm run db:migrate && npm run db:seed
+npm start                 # เปิด http://localhost:3000
+```
+
+ขั้นตอนติดตั้ง PostgreSQL บน Windows/macOS อยู่ใน [server/README.md](server/README.md)
 
 ข้อมูลในเดโม (ชื่อ เบอร์ ราคา อัตราแต้ม รางวัล) เป็นตัวอย่างทั้งหมด
