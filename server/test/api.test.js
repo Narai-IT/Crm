@@ -347,3 +347,22 @@ t('ลบข้อมูล: คูปอง · ของรางวัล · �
   assert.equal((await call('DELETE', '/api/admin/branches/HL09', undefined, adm)).status, 200);
   assert.equal((await call('DELETE', '/api/admin/branches/HL01', undefined, adm)).data.error, 'branch_in_use');
 });
+
+t('POS ส่งส่วนลดร้าน + ยอดจ่ายจริง: แต้มคิดจากยอดหลังส่วนลด ก่อนค่าบริการ/VAT · บิลไม่ใช่สมาชิกก็บันทึก', async () => {
+  const u = { 'x-dev-line-user': 'Upossum01' };
+  await call('POST', '/api/liff/register', { brand: 'humlai', name: 'ทดสอบยอด', phone: '0822220000', privacy: true }, u);
+  const mid = (await call('GET', '/api/liff/me', undefined, u)).data.member.id;
+  // ราคา 300 ส่วนลดร้าน 50 → 250 · จ่ายจริงรวมค่าบริการ+VAT 294.25
+  const r = await call('POST', '/api/pos/transactions', { posBillId: 'XUM-#901', memberId: mid, items: [{ id: 'a', name: 'ข้าวมันไก่', price: 100, qty: 3 }], storeDiscount: 50, paidTotal: 294.25 }, posHL01);
+  assert.equal(r.status, 200, JSON.stringify(r.data));
+  const rule = await mods.db.one("SELECT * FROM earn_rules WHERE brand_id = 'humlai' AND effective_to IS NULL");
+  assert.equal(r.data.points, Math.floor(250 / Number(rule.baht_per_unit)) * rule.points_per_unit);   // คิดจาก 250 ไม่ใช่ 294.25
+  assert.equal(Number(r.data.total), 294.25);
+  assert.equal(Number(r.data.discount), 50);
+  const again = await call('POST', '/api/pos/transactions', { posBillId: 'XUM-#901', memberId: mid, items: [{ id: 'a', name: 'ข้าวมันไก่', price: 100, qty: 3 }], storeDiscount: 50, paidTotal: 294.25 }, posHL01);
+  assert.equal(again.data.duplicate, true);
+  assert.equal(again.data.memberId, mid);
+  const anon = await call('POST', '/api/pos/transactions', { posBillId: 'XUM-#902', items: [{ id: 'a', name: 'ข้าวมันไก่', price: 70, qty: 1 }], paidTotal: 70, channel: 'kiosk' }, posHL01);
+  assert.equal(anon.status, 200);
+  assert.equal(anon.data.points, 0);
+});

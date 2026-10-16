@@ -35,9 +35,10 @@ export default function (r) {
     const t = await posTerminal(req);
     if (!body.posBillId) throw bad('pos_bill_id_required', 'ต้องมีเลขบิล');
     const res = await tx((db) => core.recordSale(db, { branchId: t.branchId, terminalId: t.terminalId, staffId: body.staffId || t.staffId, posBillId: String(body.posBillId),
-      memberId: body.memberId || null, items: body.items, couponIds: body.couponIds || [], channel: body.channel || (t.kind === 'kiosk' ? 'kiosk' : 'pos') }));
-    if (res.duplicate) return { duplicate: true, posBillId: res.txn.pos_bill_id, points: res.txn.points_earned, total: res.txn.total };
-    return { duplicate: false, posBillId: res.txn.pos_bill_id, subtotal: res.txn.subtotal, discount: res.discount, total: res.txn.total, points: res.points, balance: res.balance, coupons: res.coupons.map(String) };
+      memberId: body.memberId || null, items: body.items, couponIds: body.couponIds || [], channel: ['pos', 'kiosk'].includes(body.channel) ? body.channel : (t.kind === 'kiosk' ? 'kiosk' : 'pos'),
+      storeDiscount: body.storeDiscount, paidTotal: body.paidTotal }));
+    if (res.duplicate) return { duplicate: true, posBillId: res.txn.pos_bill_id, memberId: res.txn.member_id, points: res.txn.points_earned, total: res.txn.total };
+    return { duplicate: false, posBillId: res.txn.pos_bill_id, memberId: res.txn.member_id, subtotal: res.txn.subtotal, discount: res.discount, total: res.txn.total, points: res.points, balance: res.balance, coupons: res.coupons.map(String) };
   }, (b, out) => out?.duplicate ? 'บิลนี้บันทึกแล้ว ไม่ให้แต้มซ้ำ' : '+' + (out?.points ?? 0) + ' แต้ม');
 
   r.post('/api/pos/refunds', async (req, body) => {

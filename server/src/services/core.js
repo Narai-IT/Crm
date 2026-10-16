@@ -321,9 +321,14 @@ export async function recordSale(db, s) {
       discount += d; used.push(c);
     }
   }
-  const total = Math.max(0, Math.round((subtotal - discount) * 100) / 100);
+  // ส่วนลดอื่นของร้านที่ POS ให้เอง (ไม่ใช่คูปองสมาชิก) · แต้มคิดจากยอดหลังส่วนลด ก่อนค่าบริการและ VAT
+  const storeDiscount = Math.min(Math.max(0, Number(s.storeDiscount) || 0), subtotal - discount);
+  discount = Math.round((discount + storeDiscount) * 100) / 100;
+  const net = Math.max(0, Math.round((subtotal - discount) * 100) / 100);
+  // ยอดที่ลูกค้าจ่ายจริง (รวมค่าบริการ/VAT ถ้ามี) ใช้แสดงผลและรายงาน ถ้า POS ไม่ส่งมาใช้ยอดหลังส่วนลด
+  const total = Number(s.paidTotal) >= 0 && s.paidTotal !== null && s.paidTotal !== undefined && s.paidTotal !== '' ? Math.round(Number(s.paidTotal) * 100) / 100 : net;
   const rule = await currentRule(db, br.brand_id);
-  const points = member && br.earn_enabled ? calcPoints(rule, { subtotal, total }) : 0;
+  const points = member && br.earn_enabled ? calcPoints(rule, { subtotal, total: net }) : 0;
 
   const txn = await db.one(
     `INSERT INTO sales_transactions (pos_bill_id, branch_id, brand_id, member_id, channel, subtotal, discount, total, points_earned, rule_id, staff_id, items)
