@@ -51,6 +51,18 @@ export function qrToken(memberId, at = Date.now()) {
   const sig = hmac('qr:' + memberId + ':' + w).slice(0, 10);
   return { token: 'QR.' + memberId.replace('MB-', '') + '.' + w + '.' + sig, expiresIn: WINDOW - Math.floor((at / 1000) % WINDOW) };
 }
+// รหัสยืนยัน 6 หลักที่แสดงในบัตรสมาชิก (LIFF) ใช้ยืนยันตัวตนที่หน้าลูกค้าสั่งเอง · เปลี่ยนทุก 60 วิ รับย้อนหลัง 2 ช่วง (พิมพ์ช้า/สลับแอป)
+export function memberPin(memberId, at = Date.now()) {
+  const w = Math.floor(at / 1000 / WINDOW);
+  const h = crypto.createHmac('sha256', SECRET).update('pin:' + memberId + ':' + w).digest();
+  return String(h.readUInt32BE(0) % 1000000).padStart(6, '0');
+}
+export function checkMemberPin(memberId, pin, at = Date.now()) {
+  const p = String(pin || '').replace(/\D/g, '');
+  if (p.length !== 6) return false;
+  for (let k = 0; k <= 2; k++) if (memberPin(memberId, at - k * WINDOW * 1000) === p) return true;
+  return false;
+}
 export function readQrToken(token, at = Date.now()) {
   const m = /^QR\.(\d{7})\.(\d+)\.([\w-]{10})$/.exec(String(token || ''));
   if (!m) return null;

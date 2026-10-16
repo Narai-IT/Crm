@@ -2,7 +2,7 @@
 import { q, one, tx } from '../db.js';
 import { bad, notFound } from '../http.js';
 import { liffUser } from '../auth.js';
-import { isPhone, qrToken } from '../util.js';
+import { isPhone, qrToken, memberPin } from '../util.js';
 import * as core from '../services/core.js';
 
 async function me(req) {
@@ -61,7 +61,7 @@ export default function (r) {
     return { memberId: res.member.id, linked: res.linked, welcomePoints: res.welcomePoints || 0 };
   });
 
-  r.get('/api/liff/qr', async (req) => { const { m } = await needMember(req); return qrToken(m.id); });
+  r.get('/api/liff/qr', async (req) => { const { m } = await needMember(req); return { ...qrToken(m.id), pin: memberPin(m.id) }; });
 
   r.get('/api/liff/coupons', async (req, _b, url) => {
     const { m } = await needMember(req);

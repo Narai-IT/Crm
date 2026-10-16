@@ -2,7 +2,7 @@
 // ทุกฟังก์ชันรับ db ที่อยู่ใน transaction (จาก tx()) เพื่อให้ทั้งชุดสำเร็จหรือยกเลิกพร้อมกัน
 import crypto from 'node:crypto';
 import { conflict, bad, notFound, HttpError } from '../http.js';
-import { calcPoints, couponDiscount, memberIdOf, randomCode, sha256, DEV, REQUIRE_OTP, tierOf } from '../util.js';
+import { calcPoints, couponDiscount, memberIdOf, randomCode, sha256, DEV, REQUIRE_OTP, tierOf, checkMemberPin } from '../util.js';
 import { queueMessage } from './line.js';
 
 export const currentRule = (db, brandId) => db.one('SELECT * FROM earn_rules WHERE brand_id = $1 AND effective_to IS NULL', [brandId]);
@@ -351,28 +351,19 @@ export async function redeemAtPos(db, { memberId, brandId, rewardId, ref, subtot
   return { coupon, balance };
 }
 
-// รหัสยืนยัน 4 หลักส่งเข้าแชท LINE OA ของแบรนด์ (ใช้ที่หน้าลูกค้าสั่งเอง ก่อนใช้คูปอง/แลกแต้ม)
+// ยืนยันตัวตนที่หน้าลูกค้าสั่งเอง: ลูกค้าเปิดบัตรสมาชิกใน LINE แล้วพิมพ์รหัส 6 หลักใต้ QR (ไม่ส่งข้อความ จึงไม่กินโควต้า LINE OA)
+// ต้องเป็นเจ้าของบัญชี LINE ถึงเปิดบัตรได้ · ผิด 5 ครั้งใน 10 นาที ล็อก 10 นาที (นับในตาราง member_verifications)
 export async function sendMemberCode(db, { memberId, brandId }) {
-  const ident = await db.one(`SELECT i.line_user_id FROM member_line_identities i JOIN members m ON m.id = i.member_id AND m.status = 'active'
-    WHERE i.member_id = $1 ORDER BY i.linked_at DESC LIMIT 1`, [memberId]);
-  if (!ident) throw bad('no_line', 'สมาชิกนี้ยังไม่ได้ผูก LINE ใช้คูปอง/แลกแต้มที่เคาน์เตอร์แทน');
-  const recent = await db.one("SELECT count(*)::int AS n FROM member_verifications WHERE member_id = $1 AND created_at > now() - interval '10 minutes'", [memberId]);
-  if (recent.n >= 3) throw new HttpError(429, 'too_many', 'ขอรหัสบ่อยเกินไป รอสักครู่แล้วลองใหม่');
-  const code = String(crypto.randomInt(0, 10000)).padStart(4, '0');
-  await db.q("INSERT INTO member_verifications (member_id, brand_id, code_hash, expires_at) VALUES ($1,$2,$3, now() + interval '5 minutes')", [memberId, brandId, sha256(memberId + ':' + code)]);
-  await queueMessage(db, { brandId, lineUserId: ident.line_user_id, kind: 'text', data: { text: 'รหัสยืนยันใช้คูปอง/แลกแต้มที่ร้าน: ' + code + '\nใช้ได้ 5 นาที · ถ้าคุณไม่ได้ขอ ไม่ต้องทำอะไร' } });
-  return { sent: true };
+  const m = await db.one(`SELECT m.id FROM members m JOIN member_line_identities i ON i.member_id = m.id WHERE m.id = $1 AND m.status = 'active' LIMIT 1`, [memberId]);
+  if (!m) throw bad('no_line', 'สมาชิกนี้ยังไม่ได้ผูก LINE ใช้คูปอง/แลกแต้มที่เคาน์เตอร์แทน');
+  return { mode: 'card', liffUrl: process.env.LIFF_ID ? 'https://liff.line.me/' + process.env.LIFF_ID + '?brand=' + brandId : null };
 }
-export async function checkMemberCode(db, { memberId, code }) {
-  const v = await db.one('SELECT * FROM member_verifications WHERE member_id = $1 AND verified_at IS NULL AND expires_at > now() ORDER BY id DESC LIMIT 1 FOR UPDATE', [memberId]);
-  if (!v) return false;
-  if (v.attempts >= 5) return false;
-  if (v.code_hash !== sha256(memberId + ':' + String(code || '').trim())) {
-    await db.q('UPDATE member_verifications SET attempts = attempts + 1 WHERE id = $1', [v.id]);
-    return false;
-  }
-  await db.q('UPDATE member_verifications SET verified_at = now() WHERE id = $1', [v.id]);
-  return true;
+export async function checkMemberCode(db, { memberId, code, brandId }) {
+  const fails = await db.one("SELECT count(*)::int AS n FROM member_verifications WHERE member_id = $1 AND code_hash = 'fail' AND created_at > now() - interval '10 minutes'", [memberId]);
+  if (fails.n >= 5) throw new HttpError(429, 'too_many', 'ใส่รหัสผิดหลายครั้ง รอ 10 นาทีแล้วลองใหม่');
+  if (checkMemberPin(memberId, code)) return true;
+  if (brandId) await db.q("INSERT INTO member_verifications (member_id, brand_id, code_hash, expires_at, attempts) VALUES ($1,$2,'fail', now(), 1)", [memberId, brandId]);
+  return false;
 }
 
 /* ---------------- ขาย / คืนเงิน (POS) ---------------- */
@@ -446,7 +437,10 @@ export async function recordSale(db, s) {
     } else {
       balance = (await db.one('SELECT balance FROM wallets WHERE member_id = $1 AND brand_id = $2', [member.id, br.brand_id]))?.balance ?? 0;
     }
-    const ident = await db.one('SELECT line_user_id FROM member_line_identities WHERE member_id = $1 ORDER BY linked_at DESC LIMIT 1', [member.id]);
+    // แจ้งแต้มทาง LINE ตามที่แบรนด์ตั้งไว้ (ข้อความ push นับโควต้า LINE OA) · ค่าเริ่มต้นไม่แจ้ง ลูกค้าดูแต้มในบัตรสมาชิกได้ตลอด
+    const brand = await db.one('SELECT points_notify, points_notify_min FROM brands WHERE id = $1', [br.brand_id]);
+    const notify = brand && (brand.points_notify === 'all' || (brand.points_notify === 'min' && total >= Number(brand.points_notify_min)));
+    const ident = notify && await db.one('SELECT line_user_id FROM member_line_identities WHERE member_id = $1 ORDER BY linked_at DESC LIMIT 1', [member.id]);
     if (ident) await queueMessage(db, { brandId: br.brand_id, lineUserId: ident.line_user_id, kind: 'points',
       data: { billId: s.posBillId, branch: br.name, total, discount, pts: points, bal: balance, memberId: member.id } });
   }

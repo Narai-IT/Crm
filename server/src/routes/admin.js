@@ -258,7 +258,8 @@ export default function (r) {
 
   r.get('/api/admin/earn-rules', async (req) => {
     const s = await staffUser(req); requirePage(s, 'rules');
-    return q('SELECT * FROM earn_rules WHERE effective_to IS NULL AND brand_id = ANY($1) ORDER BY brand_id', [s.brands]);
+    return q(`SELECT e.*, b.points_notify, b.points_notify_min FROM earn_rules e JOIN brands b ON b.id = e.brand_id
+      WHERE e.effective_to IS NULL AND e.brand_id = ANY($1) ORDER BY e.brand_id`, [s.brands]);
   });
   // แก้กฎ = ปิดกฎเดิม (effective_to) แล้วเพิ่มกฎใหม่ · ย้อนดูได้ว่าบิลไหนใช้กฎไหน
   r.put('/api/admin/earn-rules/:brand', async (req, b, _u, p) => {
@@ -271,6 +272,20 @@ export default function (r) {
         [p.brand, b.baht, b.pts, b.base || 'net', b.rounding || 'floor', b.expiryMonths ?? 12, b.welcome ?? 0, b.backdays ?? 3, b.tiers?.gold ?? 0, b.tiers?.platinum ?? 0, !!b.promo?.on, b.promo?.mult ?? 2, b.promo?.day ?? 3, s.id]);
       await core.audit(db, actor(s), 'update_earn_rule', { type: 'brand', id: p.brand }, nw.baht_per_unit + ' บาท = ' + nw.points_per_unit + ' แต้ม · หมดอายุ ' + nw.expiry_months + ' เดือน' + (nw.promo_on ? ' · คูณ ' + nw.promo_mult : ''), old, nw);
       return nw;
+    });
+  });
+
+  // แจ้งแต้มทาง LINE หลังชำระบิล (ข้อความ push นับโควต้า LINE OA)
+  r.patch('/api/admin/brands/:id/notify', async (req, b, _u, p) => {
+    const s = await staffUser(req); requirePage(s, 'rules'); requireBrand(s, p.id);
+    const mode = ['off', 'all', 'min'].includes(b.pointsNotify) ? b.pointsNotify : 'off';
+    const min = Math.max(0, Number(b.pointsNotifyMin) || 0);
+    if (mode === 'min' && !(min > 0)) throw bad('min_required', 'ใส่ยอดขั้นต่ำที่จะแจ้งเตือน');
+    return tx(async (db) => {
+      const old = await db.one('SELECT points_notify, points_notify_min FROM brands WHERE id = $1', [p.id]);
+      const out = await db.one('UPDATE brands SET points_notify = $2, points_notify_min = $3 WHERE id = $1 RETURNING points_notify, points_notify_min', [p.id, mode, min]);
+      await core.audit(db, actor(s), 'update_notify', { type: 'brand', id: p.id }, 'แจ้งแต้มทาง LINE: ' + ({ off: 'ไม่แจ้ง', all: 'ทุกบิล', min: 'บิลตั้งแต่ ' + min + ' บาท' }[mode]), old, out);
+      return out;
     });
   });
 
