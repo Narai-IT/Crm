@@ -83,6 +83,13 @@ function templateFields(b) {
     value, min, maxDiscount, big, small, cond, validity, validFrom, validTo, days, issueFrom, issueTo, tier, followersOnly: !!b.followersOnly, useDays,
     maxIssue: optInt(b.maxIssue) || null, code, active: b.active !== false, branchIds };
 }
+const hhmm = (v) => { const x = String(v || '').trim(); if (!x) return null; if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(x.slice(0, 5))) throw bad('time_invalid', 'เวลาไม่ถูกต้อง'); return x.slice(0, 5); };
+function branchFields(b) {
+  const name = String(b.name || '').trim();
+  if (!name) throw bad('name_required', 'ใส่ชื่อสาขา');
+  return { name, phone: String(b.phone || '').trim() || null, open: hhmm(b.open), close: hhmm(b.close), posMode: b.posMode === 'manual' ? 'manual' : 'api',
+    earn: b.earnEnabled !== false, active: b.active !== false };
+}
 async function checkBranches(brandId, ids) {
   if (!ids) return null;
   const ok = await q('SELECT id FROM branches WHERE id = ANY($1) AND brand_id = $2', [ids, brandId]);
@@ -420,14 +427,113 @@ export default function (r) {
     const s = await staffUser(req);
     return q('SELECT * FROM branches WHERE brand_id = ANY($1) ORDER BY id', [s.brands]);
   });
+  r.post('/api/admin/branches', async (req, b) => {
+    const s = await staffUser(req); requirePage(s, 'branches'); requireBrand(s, b.brand);
+    const id = String(b.id || '').trim().toUpperCase();
+    if (!/^[A-Z0-9]{2,10}$/.test(id)) throw bad('id_invalid', 'รหัสสาขาต้องเป็นตัวอังกฤษ/ตัวเลข 2-10 ตัว เช่น HL04');
+    const f = branchFields(b);
+    return tx(async (db) => {
+      if (await db.one('SELECT 1 FROM branches WHERE id = $1', [id])) throw new HttpError(409, 'branch_exists', 'มีรหัสสาขานี้แล้ว');
+      const out = await db.one('INSERT INTO branches (id, brand_id, name, phone, open_time, close_time, pos_mode, earn_enabled, is_active) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *',
+        [id, b.brand, f.name, f.phone, f.open, f.close, f.posMode, f.earn, f.active]);
+      await core.audit(db, actor(s), 'create_branch', { type: 'branch', id }, f.name);
+      return out;
+    });
+  });
   r.patch('/api/admin/branches/:id', async (req, b, _u, p) => {
     const s = await staffUser(req); requirePage(s, 'branches');
     const br = await one('SELECT * FROM branches WHERE id = $1', [p.id]);
     if (!br) throw notFound(); requireBrand(s, br.brand_id);
+    // แค่สลับสะสมแต้ม (ปุ่มในตาราง) หรือแก้ทั้งหมด (ฟอร์ม)
+    const f = Object.keys(b).length === 1 && 'earnEnabled' in b
+      ? { name: br.name, phone: br.phone, open: br.open_time, close: br.close_time, posMode: br.pos_mode, earn: !!b.earnEnabled, active: br.is_active }
+      : branchFields(b);
     return tx(async (db) => {
-      const out = await db.one('UPDATE branches SET earn_enabled = COALESCE($2, earn_enabled) WHERE id = $1 RETURNING *', [p.id, b.earnEnabled ?? null]);
-      await core.audit(db, actor(s), 'update_branch', { type: 'branch', id: p.id }, br.name + ' สะสมแต้ม = ' + (out.earn_enabled ? 'เปิด' : 'ปิด'));
+      const out = await db.one('UPDATE branches SET name = $2, phone = $3, open_time = $4, close_time = $5, pos_mode = $6, earn_enabled = $7, is_active = $8 WHERE id = $1 RETURNING *',
+        [p.id, f.name, f.phone, f.open, f.close, f.posMode, f.earn, f.active]);
+      await core.audit(db, actor(s), 'update_branch', { type: 'branch', id: p.id }, out.name + ' · สะสมแต้ม ' + (out.earn_enabled ? 'เปิด' : 'ปิด') + (out.is_active ? '' : ' · ปิดสาขา'), br, out);
       return out;
+    });
+  });
+  // ลบสาขา: ได้เฉพาะสาขาที่ยังไม่มีบิล/แต้ม/สมาชิกประจำ (ประวัติการขายต้องเก็บไว้) ถ้ามีแล้วให้ "ปิดสาขา" แทน
+  r.del('/api/admin/branches/:id', async (req, _b, _u, p) => {
+    const s = await staffUser(req); requirePage(s, 'branches');
+    const br = await one('SELECT * FROM branches WHERE id = $1', [p.id]);
+    if (!br) throw notFound(); requireBrand(s, br.brand_id);
+    const used = await one(`SELECT (SELECT count(*) FROM sales_transactions WHERE branch_id = $1)::int AS bills, (SELECT count(*) FROM point_ledger WHERE branch_id = $1)::int AS ledger,
+      (SELECT count(*) FROM members WHERE home_branch_id = $1)::int AS members, (SELECT count(*) FROM member_coupons WHERE used_branch_id = $1)::int AS coupons,
+      (SELECT count(*) FROM point_adjust_requests WHERE branch_id = $1)::int AS adjusts`, [p.id]);
+    if (used.bills || used.ledger || used.members || used.coupons || used.adjusts) {
+      throw new HttpError(409, 'branch_in_use', 'ลบไม่ได้ เพราะสาขานี้มีประวัติแล้ว (บิล ' + used.bills + ' · สมาชิกประจำ ' + used.members + ') ให้ใช้ "ปิดสาขา" แทน ข้อมูลเก่ายังอยู่ครบ');
+    }
+    return tx(async (db) => {
+      await db.q('DELETE FROM pos_terminals WHERE branch_id = $1', [p.id]);
+      await db.q("DELETE FROM staff_scopes WHERE scope_type = 'branch' AND scope_id = $1", [p.id]);
+      await db.q("UPDATE coupon_templates SET branch_ids = NULLIF(array_remove(branch_ids, $1), '{}') WHERE $1 = ANY(branch_ids)", [p.id]);
+      await db.q('DELETE FROM branches WHERE id = $1', [p.id]);
+      await core.audit(db, actor(s), 'delete_branch', { type: 'branch', id: p.id }, br.name, br, null);
+      return { deleted: p.id };
+    });
+  });
+
+  // ลบสมาชิก (ตามคำขอลบข้อมูลส่วนบุคคล): ลบข้อมูลตัวตน แต้ม คูปอง ทั้งหมด · บิลขายยังเก็บไว้แต่ไม่ผูกกับสมาชิก
+  r.del('/api/admin/members/:id', async (req, _b, _u, p) => {
+    const s = await staffUser(req); requirePage(s, 'members');
+    if (s.role !== 'super') throw new HttpError(403, 'forbidden', 'ลบสมาชิกได้เฉพาะผู้ดูแลระบบ');
+    const m = await one('SELECT id, phone FROM members WHERE id = $1', [p.id]);
+    if (!m) throw notFound('ไม่พบสมาชิก');
+    return tx(async (db) => {
+      const lines = (await db.q('SELECT line_user_id FROM member_line_identities WHERE member_id = $1', [m.id])).map((x) => x.line_user_id);
+      const stat = await db.one(`SELECT (SELECT COALESCE(sum(balance),0) FROM wallets WHERE member_id = $1)::int AS points, (SELECT count(*) FROM sales_transactions WHERE member_id = $1)::int AS bills`, [m.id]);
+      await db.q('DELETE FROM member_coupons WHERE member_id = $1', [m.id]);
+      await db.q('DELETE FROM point_lots WHERE member_id = $1', [m.id]);
+      await db.q('DELETE FROM point_ledger WHERE member_id = $1', [m.id]);
+      await db.q('DELETE FROM wallets WHERE member_id = $1', [m.id]);
+      await db.q('DELETE FROM point_adjust_requests WHERE member_id = $1', [m.id]);
+      await db.q('DELETE FROM tax_invoice_requests WHERE member_id = $1', [m.id]);
+      await db.q('DELETE FROM campaign_recipients WHERE member_id = $1', [m.id]);
+      await db.q('DELETE FROM member_brand_links WHERE member_id = $1', [m.id]);
+      await db.q('DELETE FROM member_line_identities WHERE member_id = $1', [m.id]);
+      if (lines.length) await db.q('DELETE FROM line_messages WHERE line_user_id = ANY($1)', [lines]);
+      if (m.phone) await db.q('DELETE FROM otp_requests WHERE phone = $1', [m.phone]);
+      await db.q('UPDATE sales_transactions SET member_id = NULL WHERE member_id = $1', [m.id]);
+      await db.q('UPDATE members SET merged_into = NULL WHERE merged_into = $1', [m.id]);
+      await db.q('DELETE FROM members WHERE id = $1', [m.id]);
+      // บันทึกเฉพาะเลขสมาชิก ไม่เก็บชื่อ/เบอร์ไว้ใน log
+      await core.audit(db, actor(s), 'delete_member', { type: 'member', id: m.id }, 'ลบสมาชิก (แต้มคงเหลือ ' + stat.points + ' · บิล ' + stat.bills + ' ใบยังเก็บไว้แบบไม่ระบุตัวตน)');
+      return { deleted: m.id };
+    });
+  });
+
+  // ลบคูปอง: ลบใบที่แจกไปแล้วด้วย (ลูกค้าจะไม่เห็นอีก) · บิลที่เคยใช้คูปองยังเก็บยอดส่วนลดไว้
+  r.del('/api/admin/coupon-templates/:id', async (req, _b, _u, p) => {
+    const s = await staffUser(req); requirePage(s, 'rewards');
+    const t = await one("SELECT * FROM coupon_templates WHERE id = $1 AND kind <> 'internal'", [parseInt(p.id, 10)]);
+    if (!t) throw notFound('ไม่พบคูปอง');
+    if (t.brand_id) requireBrand(s, t.brand_id); else if (s.role !== 'super') throw new HttpError(403, 'forbidden', 'คูปองนี้ใช้ได้ทุกแบรนด์ ลบได้เฉพาะผู้ดูแลระบบ');
+    return tx(async (db) => {
+      const n = await db.one('SELECT count(*)::int AS n FROM member_coupons WHERE template_id = $1', [t.id]);
+      await db.q('DELETE FROM member_coupons WHERE template_id = $1', [t.id]);
+      await db.q('DELETE FROM promo_codes WHERE coupon_template_id = $1', [t.id]);
+      await db.q('UPDATE brands SET welcome_template_id = NULL WHERE welcome_template_id = $1', [t.id]);
+      await db.q('UPDATE campaigns SET coupon_template_id = NULL WHERE coupon_template_id = $1', [t.id]);
+      if (await db.one('SELECT 1 FROM rewards WHERE coupon_template_id = $1', [t.id])) throw new HttpError(409, 'coupon_in_use', 'คูปองนี้ผูกกับของรางวัลอยู่ ลบของรางวัลก่อน');
+      await db.q('DELETE FROM coupon_templates WHERE id = $1', [t.id]);
+      if (t.image_id) await db.q('DELETE FROM coupon_images WHERE id = $1 AND NOT EXISTS (SELECT 1 FROM coupon_templates WHERE image_id = $1)', [t.image_id]);
+      await core.audit(db, actor(s), 'delete_coupon', { type: 'coupon', id: String(t.id) }, t.title + ' · ลบคูปองที่แจกไปแล้ว ' + n.n + ' ใบ', t, null);
+      return { deleted: t.id, removedCoupons: n.n };
+    });
+  });
+
+  // ลบของรางวัล: คูปองที่ลูกค้าแลกไปแล้วยังใช้ได้ตามเดิม
+  r.del('/api/admin/rewards/:id', async (req, _b, _u, p) => {
+    const s = await staffUser(req); requirePage(s, 'rewards');
+    const rw = await one('SELECT * FROM rewards WHERE id = $1', [parseInt(p.id, 10)]);
+    if (!rw) throw notFound(); requireBrand(s, rw.brand_id);
+    return tx(async (db) => {
+      await db.q('DELETE FROM rewards WHERE id = $1', [rw.id]);
+      await core.audit(db, actor(s), 'delete_reward', { type: 'reward', id: String(rw.id) }, rw.name, rw, null);
+      return { deleted: rw.id };
     });
   });
 
@@ -470,6 +576,23 @@ export default function (r) {
       if (b.scopeIds || f.role !== old.role) await setScopes(db, old.id, f);
       await core.audit(db, actor(s), 'update_staff', { type: 'staff', id: old.id }, f.name + ' · ' + ROLE_NAMES[f.role] + (active ? '' : ' · ปิดใช้งาน'), old, { ...f, is_active: active });
       return { id: old.id };
+    });
+  });
+  r.del('/api/admin/staff/:id', async (req, _b, _u, p) => {
+    const s = await staffUser(req); requirePage(s, 'staff');
+    const st = await one('SELECT id, name, role, is_active FROM staff WHERE id = $1', [p.id]);
+    if (!st) throw notFound('ไม่พบผู้ใช้');
+    if (st.id === s.id) throw bad('self_delete', 'ลบบัญชีที่ตัวเองใช้อยู่ไม่ได้');
+    return tx(async (db) => {
+      if (st.role === 'super' && st.is_active) {
+        const n = await db.one("SELECT count(*)::int AS n FROM staff WHERE role = 'super' AND is_active AND id <> $1", [st.id]);
+        if (!n.n) throw bad('last_admin', 'ต้องมีผู้ดูแลระบบที่ใช้งานได้อย่างน้อย 1 คน');
+      }
+      await db.q('DELETE FROM staff_scopes WHERE staff_id = $1', [st.id]);
+      await db.q('DELETE FROM staff WHERE id = $1', [st.id]);
+      // ประวัติการทำงาน (audit, คำขอปรับแต้ม) ยังอ้างชื่อผู้ใช้นี้ไว้ตามเดิม
+      await core.audit(db, actor(s), 'delete_staff', { type: 'staff', id: st.id }, st.name + ' · ' + ROLE_NAMES[st.role]);
+      return { deleted: st.id };
     });
   });
   // ตั้งรหัสผ่านชั่วคราวให้พนักงาน (เข้าครั้งถัดไปต้องเปลี่ยนเอง)

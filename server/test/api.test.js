@@ -306,3 +306,44 @@ t('คูปองต้อนรับแยกตามสาขาที่�
   assert.ok(!at1.includes('ต้อนรับสาขา 2'));
   assert.ok(at1.includes('ส่วนลด 10% บิลแรก') && at2.includes('ส่วนลด 10% บิลแรก'));   // ใบเดิมตั้งเป็นทุกสาขา
 });
+
+t('ลบข้อมูล: คูปอง · ของรางวัล · สมาชิก (บิลยังอยู่) · ผู้ใช้ · สาขา (ลบได้เฉพาะที่ยังไม่มีประวัติ)', async () => {
+  const sup = { authorization: 'Bearer ' + (await call('POST', '/api/admin/login', { username: 'S002', password: 'demo1234' })).data.token };
+  const login = await call('POST', '/api/admin/login', { username: 'admin', password: 'Humlai-2026' });
+  const adm = { authorization: 'Bearer ' + login.data.token };
+
+  const c = await call('POST', '/api/admin/coupon-templates', { brand: 'humlai', kind: 'general', title: 'จะลบ', type: 'baht', value: 9, validity: 'days', days: 7, useDays: 127 }, adm);
+  const u = { 'x-dev-line-user': 'Udelete01' };
+  await call('POST', '/api/liff/register', { brand: 'humlai', name: 'คนจะถูกลบ', phone: '0811110000', privacy: true, branchId: 'HL01' }, u);
+  assert.ok((await call('GET', '/api/liff/coupons?brand=humlai', undefined, u)).data.some((x) => x.title === 'จะลบ'));
+  const dc = await call('DELETE', '/api/admin/coupon-templates/' + c.data.id, undefined, adm);
+  assert.equal(dc.status, 200, JSON.stringify(dc.data));
+  assert.equal(dc.data.removedCoupons, 1);
+  assert.ok(!(await call('GET', '/api/liff/coupons?brand=humlai', undefined, u)).data.some((x) => x.title === 'จะลบ'));
+
+  const rw = (await call('GET', '/api/admin/rewards', undefined, adm)).data.find((r) => r.brand_id === 'humlai');
+  assert.equal((await call('DELETE', '/api/admin/rewards/' + rw.id, undefined, adm)).status, 200);
+
+  // สมาชิก: มีบิลแล้วลบได้ บิลยังอยู่แต่ไม่ผูกสมาชิก · ไม่ใช่ผู้ดูแลระบบลบไม่ได้
+  const mid = (await call('GET', '/api/liff/me', undefined, u)).data.member.id;
+  await call('POST', '/api/pos/transactions', { posBillId: 'DEL-1', memberId: mid, items: [{ id: 'h1', name: 'ข้าวมันไก่', price: 70, qty: 1 }] }, posHL01);
+  assert.equal((await call('DELETE', '/api/admin/members/' + mid, undefined, sup)).status, 403);
+  const dm = await call('DELETE', '/api/admin/members/' + mid, undefined, adm);
+  assert.equal(dm.status, 200, JSON.stringify(dm.data));
+  assert.equal((await call('GET', '/api/liff/me', undefined, u)).data.member, null);
+  const bill = await mods.db.one("SELECT member_id FROM sales_transactions WHERE pos_bill_id = 'DEL-1'");
+  assert.equal(bill.member_id, null);
+
+  // ผู้ใช้
+  await call('POST', '/api/admin/staff', { id: 'temp.user', name: 'ชั่วคราว', role: 'marketing', password: 'Temp-pass-1' }, adm);
+  assert.equal((await call('DELETE', '/api/admin/staff/temp.user', undefined, adm)).status, 200);
+  assert.equal((await call('DELETE', '/api/admin/staff/admin', undefined, adm)).status, 400);
+
+  // สาขา: ใหม่ลบได้ · มีบิลแล้วลบไม่ได้ (ให้ปิดแทน)
+  assert.equal((await call('POST', '/api/admin/branches', { brand: 'humlai', id: 'hl09', name: 'สาขาทดลอง', open: '08:00', close: '20:00' }, adm)).status, 200);
+  assert.ok((await call('GET', '/api/public/brands')).data.find((b) => b.id === 'humlai').branches.some((b) => b.id === 'HL09'));
+  assert.equal((await call('PATCH', '/api/admin/branches/HL09', { name: 'สาขาทดลอง', active: false }, adm)).status, 200);
+  assert.ok(!(await call('GET', '/api/public/brands')).data.find((b) => b.id === 'humlai').branches.some((b) => b.id === 'HL09'));
+  assert.equal((await call('DELETE', '/api/admin/branches/HL09', undefined, adm)).status, 200);
+  assert.equal((await call('DELETE', '/api/admin/branches/HL01', undefined, adm)).data.error, 'branch_in_use');
+});

@@ -81,6 +81,8 @@
     applyTheme();
     await load();
   }
+  // รายชื่อสาขา (ใช้ในฟอร์มคูปอง/ผู้ใช้) โหลดใหม่หลังเพิ่ม/ลบสาขา
+  async function reloadBrands() { S.allBrands = await api('GET', '/api/public/brands'); S.brands = S.allBrands.filter((b) => S.staff.brands.includes(b.id)); }
   function loginView(msg) {
     $app.innerHTML = '<div class="center"><form class="login" data-f="login"><h1>หลังบ้าน CRM</h1><span class="muted">เข้าสู่ระบบด้วยรหัสพนักงาน</span>' +
       '<div class="field"><label for="u">รหัสพนักงานหรืออีเมล</label><input id="u" name="username" autocomplete="username" autocapitalize="none" autocorrect="off" spellcheck="false" required></div>' +
@@ -172,7 +174,7 @@
       '<div class="field"><label for="f-stock">จำนวนคงเหลือ</label><input id="f-stock" name="stock" type="number" min="0" placeholder="ไม่จำกัด" value="' + (r.stock === null ? '' : esc(r.stock)) + '"><span class="hint">เว้นว่าง = ไม่จำกัด</span></div>' +
       '<label class="check"><input type="checkbox" name="active"' + (r.is_active ? ' checked' : '') + '>เปิดให้แลก</label>' +
       (S.err ? '<div class="err" role="alert" style="grid-column:1/-1">' + esc(S.err) + '</div>' : '') +
-      '<div class="actions"><button class="btn">' + (isNew ? 'เพิ่มของรางวัล' : 'บันทึก') + '</button><button type="button" class="btn ghost" data-a="close">ยกเลิก</button></div></form>';
+      '<div class="actions"><button class="btn">' + (isNew ? 'เพิ่มของรางวัล' : 'บันทึก') + '</button><button type="button" class="btn ghost" data-a="close">ยกเลิก</button>' + (isNew ? '' : '<button type="button" class="btn danger" style="margin-left:auto" data-a="delReward" data-v="' + r.id + '">ลบของรางวัล</button>') + '</div></form>';
   }
 
   const KINDS = [
@@ -213,7 +215,7 @@
             '<td><small>' + (t.validity === 'dates' ? date(t.valid_from) + ' - ' + date(t.valid_to) : t.valid_days + ' วันหลังได้รับ') + '<br>' + daysText(t.use_days) + '</small></td>' +
             '<td class="r num">' + fmt(t.issued) + (t.max_issue ? ' / ' + fmt(t.max_issue) : '') + '<br><small class="muted">ใช้แล้ว ' + fmt(t.used) + '</small></td>' +
             '<td><span class="' + st[1] + '">' + st[0] + '</span></td>' +
-            '<td class="r" style="white-space:nowrap">' + (t.brand_id || S.staff.role === 'super' ? '<button class="btn ghost sm" data-a="editCoupon" data-v="' + t.id + '">แก้ไข</button> <button class="btn ghost sm" data-a="toggleCoupon" data-v="' + t.id + '">' + (t.is_active ? 'ปิด' : 'เปิด') + '</button>' : '') + '</td></tr>';
+            '<td class="r" style="white-space:nowrap">' + (t.brand_id || S.staff.role === 'super' ? '<button class="btn ghost sm" data-a="editCoupon" data-v="' + t.id + '">แก้ไข</button> <button class="btn ghost sm" data-a="toggleCoupon" data-v="' + t.id + '">' + (t.is_active ? 'ปิด' : 'เปิด') + '</button> <button class="btn danger sm" data-a="delCoupon" data-v="' + t.id + '">ลบ</button>' : '') + '</td></tr>';
         }).join('') + '</tbody></table></div>' : '<p class="muted">ยังไม่มีคูปองประเภทนี้</p>') + '</div>';
   }
   function couponForm(id) {
@@ -347,7 +349,7 @@
   function memberDetail(d) {
     const m = d.member; const w = d.wallets[S.brand] || { balance: 0, tier: {} };
     const coupons = d.coupons.filter((c) => c.status === 'ready' && (c.brand === 'all' || c.brand === S.brand));
-    return '<div class="card"><div class="hd"><h2>' + esc(m.full_name) + ' · ' + esc(m.id) + '</h2><button class="btn ghost sm" data-a="unmember">ปิด</button></div>' +
+    return '<div class="card"><div class="hd"><h2>' + esc(m.full_name) + ' · ' + esc(m.id) + '</h2>' + (S.staff.role === 'super' ? '<button class="btn danger sm" data-a="delMember" data-v="' + esc(m.id) + '">ลบสมาชิก</button>' : '') + '<button class="btn ghost sm" data-a="unmember">ปิด</button></div>' +
       '<div class="kpis"><div class="kpi"><small class="muted">แต้ม ' + esc(brand().short_name) + '</small><b class="num">' + fmt(w.balance) + '</b><small class="muted">ระดับ ' + esc(w.tier.name || '-') + '</small></div>' +
       '<div class="kpi"><small class="muted">เบอร์</small><b style="font-size:17px">' + esc(m.phone) + '</b><small class="muted">สมัคร ' + date(m.created_at) + '</small></div>' +
       '<div class="kpi"><small class="muted">คูปองพร้อมใช้</small><b class="num">' + coupons.length + '</b></div></div>' +
@@ -374,11 +376,27 @@
 
   function branchesView() {
     const list = (S.data.branches || []).filter((x) => x.brand_id === S.brand);
-    return '<div class="card"><h2>สาขา ' + esc(brand().name) + '</h2><div class="wrap"><table class="tbl"><thead><tr><th>รหัส</th><th>สาขา</th><th>เวลาเปิด</th><th>POS</th><th>สะสมแต้ม</th><th></th></tr></thead><tbody>' +
-      list.map((b) => '<tr><td>' + esc(b.id) + '</td><td>' + esc(b.name) + '</td><td>' + esc(String(b.open_time || '').slice(0, 5)) + ' - ' + esc(String(b.close_time || '').slice(0, 5)) + '</td><td>' + (b.pos_last_seen ? 'ล่าสุด ' + date(b.pos_last_seen) : '<span class="pill off">ยังไม่เชื่อม</span>') + '</td>' +
-        '<td>' + (b.earn_enabled ? '<span class="pill">เปิด</span>' : '<span class="pill off">ปิด</span>') + '</td><td class="r"><button class="btn ghost sm" data-a="toggleEarn" data-v="' + esc(b.id) + '">' + (b.earn_enabled ? 'ปิดสะสมแต้ม' : 'เปิดสะสมแต้ม') + '</button></td></tr>').join('') +
-      '</tbody></table></div><small class="muted">เพิ่มสาขาหรือแก้ชื่อสาขา แจ้งผู้ดูแลระบบ</small></div>';
+    return '<div class="card"><div class="hd"><h2>สาขา ' + esc(brand().name) + '</h2><button class="btn" data-a="editBranch">+ เพิ่มสาขา</button></div><div class="wrap"><table class="tbl"><thead><tr><th>รหัส</th><th>สาขา</th><th>โทร</th><th>เวลาเปิด</th><th>POS</th><th>สะสมแต้ม</th><th>สถานะ</th><th></th></tr></thead><tbody>' +
+      list.map((b) => '<tr class="' + (b.is_active ? '' : 'off') + '"><td>' + esc(b.id) + '</td><td>' + esc(b.name) + '</td><td>' + esc(b.phone || '-') + '</td><td>' + esc(String(b.open_time || '').slice(0, 5)) + ' - ' + esc(String(b.close_time || '').slice(0, 5)) + '</td><td>' + (b.pos_mode === 'manual' ? 'กรอกเอง' : b.pos_last_seen ? 'ล่าสุด ' + date(b.pos_last_seen) : '<span class="pill off">ยังไม่เชื่อม</span>') + '</td>' +
+        '<td>' + (b.earn_enabled ? '<span class="pill">เปิด</span>' : '<span class="pill off">ปิด</span>') + '</td><td>' + (b.is_active ? '<span class="pill">เปิดอยู่</span>' : '<span class="pill off">ปิดสาขา</span>') + '</td>' +
+        '<td class="r" style="white-space:nowrap"><button class="btn ghost sm" data-a="toggleEarn" data-v="' + esc(b.id) + '">' + (b.earn_enabled ? 'ปิดสะสมแต้ม' : 'เปิดสะสมแต้ม') + '</button> <button class="btn ghost sm" data-a="editBranch" data-v="' + esc(b.id) + '">แก้ไข</button></td></tr>').join('') +
+      '</tbody></table></div><small class="muted">ลบสาขาได้เฉพาะสาขาที่ยังไม่มีบิลหรือสมาชิก ถ้ามีประวัติแล้วให้ "ปิดสาขา" (ลูกค้าจะไม่เห็นในหน้าสมัคร แต่ข้อมูลเก่ายังอยู่ครบ)</small></div>';
   }
+  function branchForm(id) {
+    const b = id ? S.data.branches.find((x) => x.id === id) : { id: '', name: '', phone: '', open_time: '', close_time: '', pos_mode: 'api', earn_enabled: true, is_active: true };
+    return '<form class="grid" data-f="branch" data-v="' + esc(id || '') + '">' +
+      (id ? '' : '<div class="field"><label for="b-id">รหัสสาขา</label><input id="b-id" name="id" required pattern="[A-Za-z0-9]{2,10}" autocapitalize="characters" placeholder="เช่น HL04" data-autofocus><span class="hint">ใช้ผูกกับเครื่อง POS แก้ภายหลังไม่ได้</span></div>') +
+      '<div class="field"><label for="b-name">ชื่อสาขา</label><input id="b-name" name="name" required value="' + esc(b.name) + '"' + (id ? ' data-autofocus' : '') + '></div>' +
+      '<div class="field"><label for="b-phone">เบอร์โทร</label><input id="b-phone" name="phone" type="tel" value="' + esc(b.phone || '') + '"></div>' +
+      '<div class="field"><label for="b-open">เปิด</label><input id="b-open" name="open" type="time" value="' + esc(String(b.open_time || '').slice(0, 5)) + '"></div>' +
+      '<div class="field"><label for="b-close">ปิด</label><input id="b-close" name="close" type="time" value="' + esc(String(b.close_time || '').slice(0, 5)) + '"></div>' +
+      '<div class="field"><label for="b-pos">การส่งบิล</label><select id="b-pos" name="posMode"><option value="api"' + (b.pos_mode !== 'manual' ? ' selected' : '') + '>เครื่อง POS ส่งอัตโนมัติ</option><option value="manual"' + (b.pos_mode === 'manual' ? ' selected' : '') + '>พนักงานกรอกเอง</option></select></div>' +
+      '<label class="check"><input type="checkbox" name="earnEnabled"' + (b.earn_enabled ? ' checked' : '') + '>สะสมแต้มได้</label>' +
+      '<label class="check"><input type="checkbox" name="active"' + (b.is_active ? ' checked' : '') + '>เปิดสาขา (แสดงในหน้าสมัคร)</label>' +
+      errHtml() + '<div class="actions"><button class="btn">' + (id ? 'บันทึก' : 'เพิ่มสาขา') + '</button><button type="button" class="btn ghost" data-a="close">ยกเลิก</button>' +
+      (id ? '<button type="button" class="btn danger" style="margin-left:auto" data-a="delBranch" data-v="' + esc(id) + '">ลบสาขา</button>' : '') + '</div></form>';
+  }
+
 
   const ROLE_PILL = { super: 'pill', marketing: 'pill', brand: 'pill', branchmgr: 'pill warn', cashier: 'pill off' };
   function scopeText(x) {
@@ -396,7 +414,7 @@
       d.staff.map((x) => '<tr class="' + (x.is_active ? '' : 'off') + '"><td><b>' + esc(x.id) + '</b>' + (x.email ? '<br><small class="muted">' + esc(x.email) + '</small>' : '') + '</td><td>' + esc(x.name) + '</td>' +
         '<td><span class="' + (ROLE_PILL[x.role] || 'pill') + '">' + esc(roleName(x.role)) + '</span></td><td>' + esc(scopeText(x)) + '</td><td>' + (x.last_login_at ? date(x.last_login_at) : '<span class="muted">ยังไม่เคย</span>') + '</td>' +
         '<td>' + (!x.is_active ? '<span class="pill off">ปิดใช้งาน</span>' : x.must_change_password ? '<span class="pill warn">รอเปลี่ยนรหัส</span>' : '<span class="pill">ใช้งาน</span>') + '</td>' +
-        '<td class="r" style="white-space:nowrap"><button class="btn ghost sm" data-a="editStaff" data-v="' + esc(x.id) + '">แก้ไข</button> <button class="btn ghost sm" data-a="staffPw" data-v="' + esc(x.id) + '">ตั้งรหัสผ่าน</button></td></tr>').join('') +
+        '<td class="r" style="white-space:nowrap"><button class="btn ghost sm" data-a="editStaff" data-v="' + esc(x.id) + '">แก้ไข</button> <button class="btn ghost sm" data-a="staffPw" data-v="' + esc(x.id) + '">ตั้งรหัสผ่าน</button>' + (x.id !== S.staff.id ? ' <button class="btn danger sm" data-a="delStaff" data-v="' + esc(x.id) + '">ลบ</button>' : '') + '</td></tr>').join('') +
       '</tbody></table></div></div>' +
       '<div class="card"><h2>สิทธิ์ของแต่ละตำแหน่ง</h2><div class="wrap"><table class="tbl"><thead><tr><th>เมนู</th>' + d.roles.map((r) => '<th>' + esc(r.name) + '</th>').join('') + '</tr></thead><tbody>' +
       Object.keys(PAGE_NAMES).filter((p) => d.roles.some((r) => r.pages.includes(p))).map((p) => '<tr><td>' + PAGE_NAMES[p] + '</td>' + d.roles.map((r) => '<td>' + (r.pages.includes(p) ? '✓' : '<span class="muted">-</span>') + '</td>').join('') + '</tr>').join('') +
@@ -440,6 +458,7 @@
     if (e.kind === 'reward') { const r = e.id === 'new' ? null : S.data.rewards.find((x) => String(x.id) === String(e.id)); title = r ? 'แก้ไขของรางวัล' : 'เพิ่มของรางวัล · ' + brand().name; body = rewardForm(r); }
     if (e.kind === 'coupon') { title = e.id ? 'แก้ไขคูปอง' : 'สร้างคูปอง · ' + brand().name; body = couponForm(e.id); }
     if (e.kind === 'staff') { title = e.id ? 'แก้ไขผู้ใช้ ' + e.id : 'เพิ่มผู้ใช้'; body = staffForm(e.id); }
+    if (e.kind === 'branch') { title = e.id ? 'แก้ไขสาขา ' + e.id : 'เพิ่มสาขา · ' + brand().name; body = branchForm(e.id); }
     if (e.kind === 'staffpw') { title = 'ตั้งรหัสผ่านใหม่ให้ ' + e.id; body = staffPwForm(e.id); }
     return '<div class="scrim" data-a="close"></div><div class="dialog' + (e.kind === 'coupon' ? ' wide' : '') + '" role="dialog" aria-modal="true" aria-label="' + esc(title) + '"><h2>' + esc(title) + '</h2>' + body + '</div>';
   }
@@ -452,6 +471,32 @@
     brand: async (v) => { S.brand = v; store.set('crm-admin-brand', v); S.member = null; applyTheme(); await load(); },
     close: () => { S.edit = null; S.err = ''; render(); },
     editReward: (v) => { S.edit = { kind: 'reward', id: v }; S.err = ''; render(); },
+    editBranch: (v) => { S.edit = { kind: 'branch', id: v || null }; S.err = ''; render(); },
+    delBranch: async (v) => {
+      if (!confirm('ลบสาขา ' + v + ' ถาวร?')) return;
+      await api('DELETE', '/api/admin/branches/' + encodeURIComponent(v)); S.edit = null; toast('ลบสาขาแล้ว'); await reloadBrands(); await load();
+    },
+    delCoupon: async (v) => {
+      const t = S.data.coupons.find((x) => String(x.id) === String(v));
+      const msg = 'ลบคูปอง "' + t.title + '" ถาวร?' + (t.issued ? '\n\nคูปองที่แจกไปแล้ว ' + t.issued + ' ใบ (ใช้แล้ว ' + t.used + ') จะหายจากบัญชีลูกค้าด้วย ถ้าแค่อยากหยุดแจกให้กด "ปิด" แทน\n\nพิมพ์คำว่า ลบ เพื่อยืนยัน' : '');
+      if (t.issued ? prompt(msg) !== 'ลบ' : !confirm(msg)) return;
+      const r = await api('DELETE', '/api/admin/coupon-templates/' + v); toast('ลบคูปองแล้ว' + (r.removedCoupons ? ' (รวม ' + r.removedCoupons + ' ใบที่แจกไป)' : '')); await load();
+    },
+    delReward: async (v) => {
+      const r = S.data.rewards.find((x) => String(x.id) === String(v));
+      if (!confirm('ลบของรางวัล "' + r.name + '" ถาวร? คูปองที่ลูกค้าแลกไปแล้วยังใช้ได้ตามเดิม')) return;
+      await api('DELETE', '/api/admin/rewards/' + v); S.edit = null; toast('ลบของรางวัลแล้ว'); await load();
+    },
+    delMember: async (v) => {
+      const ans = prompt('ลบสมาชิก ' + v + ' ถาวร?\n\nข้อมูลส่วนตัว แต้มทุกแบรนด์ คูปอง และประวัติแต้มจะถูกลบและกู้คืนไม่ได้ บิลขายยังเก็บไว้แบบไม่ระบุตัวตน\n\nพิมพ์เลขสมาชิก ' + v + ' เพื่อยืนยัน');
+      if (ans === null) return;
+      if (ans.trim().toUpperCase() !== v) return toast('เลขสมาชิกไม่ตรง ยังไม่ได้ลบ');
+      await api('DELETE', '/api/admin/members/' + encodeURIComponent(v)); S.member = null; toast('ลบสมาชิกแล้ว'); await load();
+    },
+    delStaff: async (v) => {
+      if (!confirm('ลบผู้ใช้ ' + v + ' ถาวร? ถ้าแค่ลาออกชั่วคราวให้ใช้ "แก้ไข" แล้วปิดใช้งานแทน (ประวัติการทำงานยังอยู่ทั้งสองแบบ)')) return;
+      await api('DELETE', '/api/admin/staff/' + encodeURIComponent(v)); toast('ลบผู้ใช้แล้ว'); await load();
+    },
     cfilter: (v) => { S.cfilter = v; render(); },
     editCoupon: (v) => {
       const t = v ? S.data.coupons.find((x) => String(x.id) === String(v)) : null;
@@ -521,6 +566,11 @@
       if (id) await api('PATCH', '/api/admin/staff/' + encodeURIComponent(id), body);
       else await api('POST', '/api/admin/staff', Object.assign(body, { id: o.id, password: o.password }));
       S.edit = null; toast(id ? 'บันทึกแล้ว' : 'เพิ่มผู้ใช้แล้ว แจ้งชื่อผู้ใช้และรหัสชั่วคราวให้พนักงาน'); await load();
+    },
+    branch: async (o, id) => {
+      const body = { brand: S.brand, id: o.id, name: o.name, phone: o.phone, open: o.open, close: o.close, posMode: o.posMode, earnEnabled: o.earnEnabled, active: o.active };
+      if (id) await api('PATCH', '/api/admin/branches/' + encodeURIComponent(id), body); else await api('POST', '/api/admin/branches', body);
+      S.edit = null; toast(id ? 'บันทึกสาขาแล้ว' : 'เพิ่มสาขาแล้ว'); await reloadBrands(); await load();
     },
     staffpw: async (o, id) => {
       await api('POST', '/api/admin/staff/' + encodeURIComponent(id) + '/password', { password: o.password });

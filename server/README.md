@@ -78,7 +78,7 @@ server/
     services/line.js           ตรวจลายเซ็น webhook, ตอบ Rich Menu, สร้าง Flex, ส่งผ่าน outbox
     routes/                    liff · pos · admin · webhook · dev
     worker.js                  ส่งข้อความหลัง commit, แต้ม/คูปองหมดอายุ
-  test/api.test.js             ทดสอบ flow หลัก 13 กรณี
+  test/api.test.js             ทดสอบ flow หลัก 15 กรณี
 ```
 
 ## API
