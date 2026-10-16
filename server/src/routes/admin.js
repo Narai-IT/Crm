@@ -9,6 +9,35 @@ import { COUPON_SQL, couponView } from './liff.js';
 
 const actor = (s) => ({ type: 'staff', id: s.id, name: s.name });
 
+const CATS = ['food', 'side', 'drink', 'discount'];
+const optInt = (v) => (v === '' || v === null || v === undefined ? null : Math.max(0, parseInt(v, 10) || 0));
+const endOfDay = (d) => { const x = new Date(String(d).length <= 10 ? d + 'T23:59:59+07:00' : d); if (isNaN(x)) throw bad('date_invalid', 'วันที่ไม่ถูกต้อง'); return x; };
+function couponFields(b) {
+  const type = b.type === 'pct' ? 'pct' : 'baht';
+  const value = Number(b.value);
+  if (!(value > 0) || (type === 'pct' && value > 100)) throw bad('coupon_invalid', 'ใส่มูลค่าส่วนลดให้ถูกต้อง');
+  return { title: String(b.title || '').trim(), type, value, min: Math.max(0, Number(b.min) || 0), days: Math.min(365, Math.max(1, parseInt(b.days, 10) || 30)) };
+}
+const defaultTitle = (f) => 'ส่วนลด ' + f.value + (f.type === 'pct' ? '%' : ' บาท') + (f.min ? ' เมื่อซื้อครบ ' + f.min + ' บาท' : '');
+function rewardFields(b) {
+  const name = String(b.name || '').trim(); const cost = parseInt(b.cost, 10);
+  if (!name || !(cost > 0)) throw bad('reward_invalid', 'ใส่ชื่อรางวัลและแต้มที่ใช้');
+  const cat = CATS.includes(b.cat) ? b.cat : 'food';
+  const type = cat === 'discount' && b.type === 'pct' ? 'pct' : 'baht'; const value = Math.max(0, Number(b.value) || 0);
+  if (cat === 'discount' && !(value > 0)) throw bad('reward_invalid', 'รางวัลแบบส่วนลด ต้องใส่มูลค่าส่วนลด');
+  return { name, cost, cat, type, value, min: Math.max(0, Number(b.min) || 0), days: Math.min(365, Math.max(1, parseInt(b.days, 10) || 30)), stock: optInt(b.stock) };
+}
+// รางวัลแบบของฟรี: คูปองลดเท่าราคาของชิ้นนั้น (value) · แบบส่วนลด: ลดตามที่ตั้ง
+const rewardTemplate = (f) => f.cat === 'discount'
+  ? { title: f.name, big: f.type === 'pct' ? '-' + f.value + '%' : '-' + f.value, small: f.type === 'pct' ? 'ส่วนลด' : 'บาท', cond: 'แลกด้วย ' + f.cost + ' แต้ม' + (f.min ? ' · ซื้อครบ ' + f.min + ' บาท' : ''), type: f.type, value: f.value, min: f.min, days: f.days }
+  : { title: f.name, big: 'ฟรี', small: 'แลกแต้ม', cond: 'แลกด้วย ' + f.cost + ' แต้ม', type: 'baht', value: f.value, min: f.min, days: f.days };
+async function newTemplate(db, brandId, t) {
+  const big = t.big || (t.type === 'pct' ? '-' + t.value + '%' : '-' + t.value);
+  const small = t.small || (t.type === 'pct' ? 'ส่วนลด' : 'บาท');
+  return (await db.one(`INSERT INTO coupon_templates (brand_id, title, badge_big, badge_small, condition_text, discount_type, discount_value, min_spend, valid_days)
+    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id`, [brandId, t.title, big, small, t.cond || '', t.type, t.value, t.min || 0, t.days || 30])).id;
+}
+
 // กลุ่มเป้าหมายแคมเปญ: ต้องติดตาม OA ของแบรนด์ + ยินยอมรับข่าวสารของแบรนด์นั้นเสมอ
 export function audienceSql(segment) {
   const base = `SELECT m.id, i.line_user_id FROM members m
@@ -140,30 +169,88 @@ export default function (r) {
 
   r.get('/api/admin/rewards', async (req) => {
     const s = await staffUser(req); requirePage(s, 'rewards');
-    return q(`SELECT r.*, t.discount_type, t.discount_value, t.min_spend,
-      (SELECT count(*) FROM member_coupons c WHERE c.source = 'redeem' AND c.template_id = r.coupon_template_id)::int AS redeemed
-      FROM rewards r JOIN coupon_templates t ON t.id = r.coupon_template_id WHERE r.brand_id = ANY($1) ORDER BY r.brand_id, r.points_cost`, [s.brands]);
+    return q(`SELECT r.*, t.discount_type, t.discount_value, t.min_spend, t.valid_days,
+      (SELECT count(*) FROM point_ledger l WHERE l.entry_type = 'redeem' AND l.ref_type = 'reward' AND l.ref_id = r.id::text)::int AS redeemed
+      FROM rewards r JOIN coupon_templates t ON t.id = r.coupon_template_id WHERE r.brand_id = ANY($1) ORDER BY r.brand_id, r.is_active DESC, r.points_cost`, [s.brands]);
   });
   r.post('/api/admin/rewards', async (req, b) => {
     const s = await staffUser(req); requirePage(s, 'rewards'); requireBrand(s, b.brand);
-    if (!String(b.name || '').trim() || !(Number(b.cost) > 0)) throw bad('reward_invalid', 'ใส่ชื่อรางวัลและแต้มที่ใช้');
+    const f = rewardFields(b);
     return tx(async (db) => {
-      const isDisc = b.cat === 'discount';
-      const t = await db.one(`INSERT INTO coupon_templates (brand_id, title, badge_big, badge_small, condition_text, discount_type, discount_value, min_spend, valid_days)
-        VALUES ($1,$2,$3,$4,$5,'baht',$6,$7,30) RETURNING id`, [b.brand, b.name, isDisc ? '-' + Number(b.value || 0) : 'ฟรี', isDisc ? 'บาท' : 'แลกแต้ม', 'แลกด้วย ' + b.cost + ' แต้ม', Number(b.value || 0), Number(b.min || 0)]);
-      const rw = await db.one('INSERT INTO rewards (brand_id, name, category, points_cost, coupon_template_id, stock) VALUES ($1,$2,$3,$4,$5,$6) RETURNING *', [b.brand, b.name, b.cat || 'food', Number(b.cost), t.id, b.stock === '' || b.stock == null ? null : Number(b.stock)]);
-      await core.audit(db, actor(s), 'create_reward', { type: 'reward', id: String(rw.id) }, b.brand + ' · ' + b.name);
+      const t = await newTemplate(db, b.brand, rewardTemplate(f));
+      const rw = await db.one('INSERT INTO rewards (brand_id, name, category, points_cost, coupon_template_id, stock, is_active) VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *',
+        [b.brand, f.name, f.cat, f.cost, t, f.stock, b.active !== false]);
+      await core.audit(db, actor(s), 'create_reward', { type: 'reward', id: String(rw.id) }, b.brand + ' · ' + f.name + ' · ' + f.cost + ' แต้ม');
       return rw;
     });
   });
+  // แก้รางวัล: ถ้าเปลี่ยนชื่อ/ส่วนลด จะสร้างแม่แบบคูปองใหม่ คูปองที่ลูกค้าแลกไปแล้วยังใช้ตามเงื่อนไขเดิม
   r.patch('/api/admin/rewards/:id', async (req, b, _u, p) => {
     const s = await staffUser(req); requirePage(s, 'rewards');
-    const rw = await one('SELECT * FROM rewards WHERE id = $1', [parseInt(p.id.replace(/\D/g, ''), 10)]);
+    const rw = await one('SELECT r.*, t.discount_type, t.discount_value, t.min_spend, t.valid_days FROM rewards r JOIN coupon_templates t ON t.id = r.coupon_template_id WHERE r.id = $1', [parseInt(p.id.replace(/\D/g, ''), 10)]);
     if (!rw) throw notFound(); requireBrand(s, rw.brand_id);
+    const f = rewardFields({
+      name: b.name ?? rw.name, cat: b.cat ?? rw.category, cost: b.cost ?? rw.points_cost,
+      value: b.value ?? rw.discount_value, type: b.type ?? rw.discount_type, min: b.min ?? rw.min_spend, days: b.days ?? rw.valid_days,
+      stock: 'stock' in b ? b.stock : rw.stock
+    });
     return tx(async (db) => {
-      const out = await db.one('UPDATE rewards SET is_active = COALESCE($2, is_active), stock = COALESCE($3, stock), points_cost = COALESCE($4, points_cost) WHERE id = $1 RETURNING *',
-        [rw.id, b.active ?? null, b.stock ?? null, b.cost ?? null]);
-      await core.audit(db, actor(s), 'update_reward', { type: 'reward', id: String(rw.id) }, rw.name + (b.active !== undefined ? ' active=' + b.active : ''), rw, out);
+      const changed = f.name !== rw.name || f.cat !== rw.category || f.value !== Number(rw.discount_value) || f.type !== rw.discount_type || f.min !== Number(rw.min_spend) || f.days !== rw.valid_days;
+      const tpl = changed ? await newTemplate(db, rw.brand_id, rewardTemplate(f)) : rw.coupon_template_id;
+      const out = await db.one('UPDATE rewards SET name = $2, category = $3, points_cost = $4, stock = $5, is_active = COALESCE($6, is_active), coupon_template_id = $7 WHERE id = $1 RETURNING *',
+        [rw.id, f.name, f.cat, f.cost, f.stock, b.active ?? null, tpl]);
+      await core.audit(db, actor(s), 'update_reward', { type: 'reward', id: String(rw.id) }, out.name + ' · ' + out.points_cost + ' แต้ม' + (out.is_active ? '' : ' · ปิดแลก'), rw, out);
+      return out;
+    });
+  });
+
+  // คูปองต้อนรับสมาชิกใหม่ + โค้ดคูปองที่ลูกค้ากรอกเอง
+  r.get('/api/admin/coupons', async (req) => {
+    const s = await staffUser(req); requirePage(s, 'rewards');
+    const welcome = await q(`SELECT b.id AS brand_id, b.name, t.id AS template_id, t.title, t.discount_type, t.discount_value, t.min_spend, t.valid_days
+      FROM brands b LEFT JOIN coupon_templates t ON t.id = b.welcome_template_id WHERE b.id = ANY($1) ORDER BY b.id`, [s.brands]);
+    const codes = await q(`SELECT p.*, t.title, t.discount_type, t.discount_value, t.min_spend, t.valid_days FROM promo_codes p JOIN coupon_templates t ON t.id = p.coupon_template_id
+      WHERE p.brand_id = ANY($1) OR (p.brand_id IS NULL AND $2) ORDER BY (p.expires_at IS NULL OR p.expires_at > now()) DESC, p.code`, [s.brands, s.role === 'super']);
+    return { welcome, codes };
+  });
+  r.put('/api/admin/welcome-coupon/:brand', async (req, b, _u, p) => {
+    const s = await staffUser(req); requirePage(s, 'rewards'); requireBrand(s, p.brand);
+    return tx(async (db) => {
+      const old = await db.one('SELECT welcome_template_id FROM brands WHERE id = $1', [p.brand]);
+      let tpl = null;
+      if (!b.off) {
+        const f = couponFields(b);
+        tpl = await newTemplate(db, p.brand, { ...f, title: f.title || defaultTitle(f), cond: 'สำหรับสมาชิกใหม่ · 1 ครั้ง', small: 'บิลแรก' });
+      }
+      await db.q('UPDATE brands SET welcome_template_id = $2 WHERE id = $1', [p.brand, tpl]);
+      await core.audit(db, actor(s), 'update_welcome_coupon', { type: 'brand', id: p.brand }, tpl ? 'คูปองต้อนรับ ' + (String(b.title || '').trim() || defaultTitle(couponFields(b))) : 'ปิดคูปองต้อนรับ', old, { welcome_template_id: tpl });
+      return { templateId: tpl };
+    });
+  });
+  r.post('/api/admin/promo-codes', async (req, b) => {
+    const s = await staffUser(req); requirePage(s, 'rewards');
+    if (b.brand) requireBrand(s, b.brand); else if (s.role !== 'super') throw new HttpError(403, 'forbidden', 'โค้ดที่ใช้ได้ทุกแบรนด์ สร้างได้เฉพาะผู้ดูแลกลุ่ม');
+    const code = String(b.code || '').trim().toUpperCase();
+    if (!/^[A-Z0-9]{4,20}$/.test(code)) throw bad('code_invalid', 'โค้ดต้องเป็นตัวอังกฤษหรือตัวเลข 4-20 ตัว');
+    const f = couponFields(b);
+    return tx(async (db) => {
+      if (await db.one('SELECT 1 FROM promo_codes WHERE code = $1', [code])) throw new HttpError(409, 'code_exists', 'มีโค้ดนี้อยู่แล้ว');
+      const tpl = await newTemplate(db, b.brand || null, { ...f, title: f.title || defaultTitle(f), cond: 'จากโค้ด ' + code + ' · ใช้ได้ 1 ครั้ง', small: 'โค้ดพิเศษ' });
+      const row = await db.one('INSERT INTO promo_codes (code, brand_id, coupon_template_id, max_uses, expires_at) VALUES ($1,$2,$3,$4,$5) RETURNING *',
+        [code, b.brand || null, tpl, optInt(b.maxUses), b.expiresAt ? endOfDay(b.expiresAt) : null]);
+      await core.audit(db, actor(s), 'create_promo_code', { type: 'promo_code', id: code }, (b.brand || 'ทุกแบรนด์') + ' · ' + defaultTitle(f));
+      return row;
+    });
+  });
+  r.patch('/api/admin/promo-codes/:code', async (req, b, _u, p) => {
+    const s = await staffUser(req); requirePage(s, 'rewards');
+    const pc = await one('SELECT * FROM promo_codes WHERE code = $1', [p.code.toUpperCase()]);
+    if (!pc) throw notFound('ไม่พบโค้ด');
+    if (pc.brand_id) requireBrand(s, pc.brand_id); else if (s.role !== 'super') throw new HttpError(403, 'forbidden', 'โค้ดนี้ใช้ได้ทุกแบรนด์ แก้ได้เฉพาะผู้ดูแลกลุ่ม');
+    const exp = b.active === false ? new Date() : 'expiresAt' in b ? (b.expiresAt ? endOfDay(b.expiresAt) : null) : pc.expires_at;
+    return tx(async (db) => {
+      const out = await db.one('UPDATE promo_codes SET max_uses = $2, expires_at = $3 WHERE code = $1 RETURNING *', [pc.code, 'maxUses' in b ? optInt(b.maxUses) : pc.max_uses, exp]);
+      await core.audit(db, actor(s), 'update_promo_code', { type: 'promo_code', id: pc.code }, b.active === false ? 'ปิดโค้ด' : 'แก้โค้ด', pc, out);
       return out;
     });
   });

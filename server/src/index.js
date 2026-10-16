@@ -17,6 +17,7 @@ import pub from './routes/public.js';
 const here = dirname(fileURLToPath(import.meta.url));
 const STATIC_ROOT = process.env.STATIC_ROOT || join(here, '..', '..', 'demo');
 const LIFF_ROOT = process.env.LIFF_ROOT || join(here, '..', '..', 'liff');
+const ADMIN_ROOT = process.env.ADMIN_ROOT || join(here, '..', '..', 'admin');
 
 export function buildServer() {
   const r = createRouter();
@@ -33,6 +34,9 @@ export function buildServer() {
       // หน้า LIFF ของลูกค้า: /liff/ (ตั้งเป็น Endpoint URL ของ LIFF app)
       if (path === '/liff') { res.writeHead(302, { location: '/liff/' + url.search }); return res.end(); }
       if (path.startsWith('/liff/') && req.method === 'GET' && (await serveStatic(LIFF_ROOT, path.slice(5), res))) return;
+      // หลังบ้านจริง (ล็อกอินด้วยรหัสพนักงาน): /admin/
+      if (path === '/admin') { res.writeHead(302, { location: '/admin/' }); return res.end(); }
+      if (path.startsWith('/admin/') && req.method === 'GET' && (await serveStatic(ADMIN_ROOT, path.slice(6), res))) return;
       if (req.method === 'GET' && (await serveStatic(STATIC_ROOT, path, res))) return;
       return send(res, 404, { error: 'not_found' });
     }

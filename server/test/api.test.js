@@ -163,3 +163,33 @@ t('Webhook จริง: ต้องมีลายเซ็นถูกต้�
   const n = await mods.db.one("SELECT count(*)::int AS n FROM line_messages WHERE line_user_id = $1 AND kind = 'branches'", [USER]);
   assert.equal(n.n, 1);
 });
+
+t('หลังบ้าน: แก้ของรางวัล (คูปองที่แลกไปแล้วไม่เปลี่ยน) · คูปองต้อนรับ · โค้ดคูปอง', async () => {
+  const login = await call('POST', '/api/admin/login', { username: 'S001', password: 'demo1234' });
+  const adm = { authorization: 'Bearer ' + login.data.token };
+  const add = await call('POST', '/api/admin/rewards', { brand: 'humlai', name: 'ไข่ต้มฟรี', cat: 'side', cost: 30, value: 10, stock: 5 }, adm);
+  assert.equal(add.status, 200, JSON.stringify(add.data));
+  const red = await call('POST', '/api/liff/redemptions', { rewardId: add.data.id }, { ...asUser, 'idempotency-key': 'k-egg-1' });
+  assert.equal(red.status, 200, JSON.stringify(red.data));
+  const ed = await call('PATCH', '/api/admin/rewards/' + add.data.id, { name: 'ไข่ต้ม 2 ฟอง', value: 20, stock: null }, adm);
+  assert.equal(ed.status, 200, JSON.stringify(ed.data));
+  assert.equal(ed.data.stock, null);
+  assert.notEqual(ed.data.coupon_template_id, add.data.coupon_template_id);
+  const list = (await call('GET', '/api/admin/rewards', undefined, adm)).data.find((r) => r.id === add.data.id);
+  assert.equal(list.redeemed, 1);
+  assert.equal(Number(list.discount_value), 20);
+  const mine = (await call('GET', '/api/liff/coupons?brand=humlai', undefined, asUser)).data.find((c) => c.title === 'ไข่ต้มฟรี');
+  assert.equal(Number(mine.cp.value), 10);
+
+  assert.equal((await call('PUT', '/api/admin/welcome-coupon/humlai', { type: 'baht', value: 30, min: 100 }, adm)).status, 200);
+  const w = (await call('GET', '/api/admin/coupons', undefined, adm)).data.welcome.find((x) => x.brand_id === 'humlai');
+  assert.equal(Number(w.discount_value), 30);
+  assert.equal(w.title, 'ส่วนลด 30 บาท เมื่อซื้อครบ 100 บาท');
+
+  const pc = await call('POST', '/api/admin/promo-codes', { code: 'hl50', brand: 'humlai', type: 'baht', value: 50, maxUses: 10 }, adm);
+  assert.equal(pc.status, 200, JSON.stringify(pc.data));
+  assert.equal((await call('POST', '/api/liff/coupons/claim', { brand: 'humlai', code: 'HL50' }, asUser)).status, 200);
+  assert.equal((await call('PATCH', '/api/admin/promo-codes/HL50', { active: false }, adm)).status, 200);
+  const u3 = { 'x-dev-line-user': 'Utest000000000000000000000000002' };
+  assert.equal((await call('POST', '/api/liff/coupons/claim', { brand: 'humlai', code: 'HL50' }, u3)).status, 400);
+});

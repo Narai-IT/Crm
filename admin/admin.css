@@ -1,0 +1,96 @@
+/* หลังบ้าน CRM · ใช้บนคอมเป็นหลัก แต่เปิดบนมือถือได้ · สีหลักเปลี่ยนตามแบรนด์ที่เลือก (--a) */
+:root {
+  --a: #C7481A; --as: #FDEBE1; --ai: #8A3A16;
+  --bg: #F6F4F2; --card: #FFFFFF; --ink: #2A1D17; --muted: #6B5146; --line: #E6DDD6; --side: #22282B;
+  --good: #2F7D4F; --good-s: #E3F1E8; --bad: #B42318; --bad-s: #FCE8E6;
+  --f-display: 'Prompt', 'Noto Sans Thai', Tahoma, sans-serif;
+  --f-body: 'IBM Plex Sans Thai', 'Noto Sans Thai', Tahoma, sans-serif;
+  color-scheme: light;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; min-height: 100%; }
+body { background: var(--bg); color: var(--ink); font-family: var(--f-body); font-size: 15px; line-height: 1.5; }
+button, input, select, textarea { font: inherit; color: inherit; }
+button { cursor: pointer; }
+:focus-visible { outline: 2px solid var(--a); outline-offset: 2px; }
+h1, h2, h3 { font-family: var(--f-display); font-weight: 600; margin: 0; }
+h1 { font-size: 22px; } h2 { font-size: 17px; }
+.num { font-variant-numeric: tabular-nums; }
+.muted { color: var(--muted); }
+small { font-size: 13px; }
+[hidden] { display: none !important; }
+.center { min-height: 100vh; display: grid; place-items: center; padding: 24px; }
+
+/* ล็อกอิน */
+.login { width: 100%; max-width: 360px; background: var(--card); border: 1px solid var(--line); border-radius: 16px; padding: 28px 24px; display: flex; flex-direction: column; gap: 14px; }
+
+/* โครงหน้า */
+.shell { display: grid; grid-template-columns: 220px 1fr; min-height: 100vh; }
+.side { background: var(--side); color: #E9E4E0; padding: 18px 12px; display: flex; flex-direction: column; gap: 4px; position: sticky; top: 0; height: 100vh; overflow-y: auto; }
+.side .logo { font-family: var(--f-display); font-weight: 600; font-size: 17px; padding: 4px 10px 14px; color: #fff; }
+.side button { all: unset; box-sizing: border-box; display: block; padding: 10px 12px; border-radius: 10px; cursor: pointer; }
+.side button:hover { background: rgba(255, 255, 255, 0.08); }
+.side button[aria-current="page"] { background: var(--a); color: #fff; font-weight: 600; }
+.side button:focus-visible { outline: 2px solid #fff; }
+.side .who { margin-top: auto; padding: 12px 10px 0; border-top: 1px solid rgba(255, 255, 255, 0.12); font-size: 13px; color: #BDB3AC; }
+.side .who button { padding: 6px 0; color: #fff; text-decoration: underline; }
+.main { padding: 22px 28px 60px; min-width: 0; display: flex; flex-direction: column; gap: 16px; }
+.top { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.top h1 { flex: 1; }
+.bpick { display: flex; gap: 6px; flex-wrap: wrap; }
+.bpick button { border: 1px solid var(--line); background: var(--card); border-radius: 999px; padding: 6px 14px; min-height: 40px; }
+.bpick button[aria-pressed="true"] { background: var(--a); border-color: var(--a); color: #fff; font-weight: 600; }
+
+.card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 16px 18px; display: flex; flex-direction: column; gap: 12px; }
+.card .hd { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.card .hd h2 { flex: 1; }
+.kpis { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 12px; }
+.kpi { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 14px 16px; }
+.kpi b { display: block; font-family: var(--f-display); font-size: 24px; }
+
+.btn { border: 0; border-radius: 10px; min-height: 40px; padding: 8px 16px; background: var(--a); color: #fff; font-weight: 600; }
+.btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.btn.ghost { background: var(--card); color: var(--ink); border: 1px solid var(--line); }
+.btn.danger { background: var(--bad-s); color: var(--bad); }
+.btn.good { background: var(--good-s); color: var(--good); }
+.btn.sm { min-height: 34px; padding: 4px 12px; font-size: 14px; }
+.link { all: unset; cursor: pointer; color: var(--ai); font-weight: 600; }
+.link:focus-visible { outline: 2px solid var(--a); }
+
+.tbl { width: 100%; border-collapse: collapse; font-size: 14px; }
+.tbl th, .tbl td { text-align: left; padding: 9px 8px; border-bottom: 1px solid var(--line); vertical-align: middle; }
+.tbl th { font-weight: 600; color: var(--muted); font-size: 13px; }
+.tbl td.r, .tbl th.r { text-align: right; }
+.tbl tr.off td { color: var(--muted); }
+.wrap { overflow-x: auto; }
+.pill { display: inline-block; font-size: 12px; font-weight: 600; padding: 2px 9px; border-radius: 999px; background: var(--good-s); color: var(--good); white-space: nowrap; }
+.pill.off { background: #EEE9E5; color: var(--muted); }
+.pill.warn { background: #FFF3D6; color: #8A5A00; }
+
+/* ฟอร์ม */
+form.grid, .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 12px; align-items: end; }
+.field { display: flex; flex-direction: column; gap: 4px; }
+.field label { font-size: 13px; font-weight: 600; color: var(--muted); }
+.field input, .field select, .field textarea { min-height: 40px; border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; background: #fff; }
+.field textarea { min-height: 80px; resize: vertical; }
+.field .hint { font-size: 12px; color: var(--muted); }
+.check { display: flex; gap: 8px; align-items: center; min-height: 40px; }
+.check input { width: 18px; height: 18px; accent-color: var(--a); }
+.actions { display: flex; gap: 8px; flex-wrap: wrap; grid-column: 1 / -1; }
+.err { color: var(--bad); background: var(--bad-s); border-radius: 10px; padding: 8px 12px; font-size: 14px; }
+.note { background: var(--as); color: var(--ai); border-radius: 10px; padding: 10px 14px; font-size: 14px; }
+
+/* หน้าต่างแก้ไข */
+.scrim { position: fixed; inset: 0; background: rgba(20, 15, 12, 0.45); z-index: 20; }
+.dialog { position: fixed; z-index: 21; top: 50%; left: 50%; transform: translate(-50%, -50%); width: min(560px, calc(100vw - 32px)); max-height: calc(100vh - 32px); overflow-y: auto; background: var(--card); border-radius: 16px; padding: 20px; display: flex; flex-direction: column; gap: 14px; }
+
+.toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); background: var(--ink); color: #fff; padding: 10px 18px; border-radius: 12px; z-index: 30; max-width: calc(100vw - 32px); }
+
+@media (max-width: 760px) {
+  .shell { grid-template-columns: 1fr; }
+  .side { position: static; height: auto; flex-direction: row; flex-wrap: wrap; padding: 10px 16px; }
+  .side .logo { width: 100%; padding: 4px 0 6px; }
+  .side button { padding: 8px 10px; }
+  .side .who { width: 100%; margin-top: 4px; padding: 8px 0 0; }
+  .main { padding: 16px; }
+}

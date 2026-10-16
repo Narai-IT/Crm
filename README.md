@@ -8,6 +8,7 @@
   - **หลังบ้าน**: ภาพรวม KPI, สมาชิก 360°, อนุมัติแต้ม, กฎแต้ม, รางวัล, แคมเปญ, LINE OA, สาขา, สิทธิ์, Audit Log
 - [`docs/DESIGN.md`](docs/DESIGN.md): สถาปัตยกรรม การตั้งค่า LINE หน้าจอ API ลำดับการทำงาน และกรณีพิเศษ
 - [`liff/`](liff/): หน้าสมาชิกตัวจริงที่ลูกค้าเปิดจาก Rich Menu ในแอป LINE (ล็อกอินด้วย LINE, QR สแกนได้จริง) เสิร์ฟที่ `/liff/`
+- [`admin/`](admin/): หลังบ้านตัวจริง ล็อกอินด้วยรหัสพนักงาน เสิร์ฟที่ `/admin/` (ของรางวัล คูปองต้อนรับ โค้ดคูปอง กฎแต้ม สมาชิก อนุมัติแต้ม สาขา)
 - [`docs/LINE-SETUP.md`](docs/LINE-SETUP.md): ขั้นตอนตั้งค่า LINE OA, LINE Login/LIFF, webhook และ Cloudflare Access
 - [`server/`](server/README.md): backend ใช้งานจริงบน **PostgreSQL** (REST API, LINE webhook, งานส่งข้อความ/แต้มหมดอายุ) พร้อมวิธีติดตั้งบนเครื่อง และชุดทดสอบอัตโนมัติ
 

@@ -105,11 +105,7 @@
   /* ---------- หน้าจอ ---------- */
   function head(title) {
     return '<header class="head"><div class="head-row"><button class="icon-btn" data-a="close" aria-label="ปิด">' + I.close + '</button><div class="t">' + esc(title) + '</div>' +
-      (S.me && S.me.member ? '<button class="icon-btn" data-a="tab" data-v="profile" aria-label="ข้อมูลของฉัน">' + I.user + '</button>' : '<span class="icon-btn"></span>') + '</div>' +
-      (S.me && S.me.member && S.tab !== 'profile' ? '<div class="bswitch" role="group" aria-label="เลือกแบรนด์">' + S.brands.map((b) => {
-        const w = S.me.wallets[b.id] || { balance: 0 };
-        return '<button data-a="brand" data-v="' + b.id + '" aria-pressed="' + (b.id === S.brand) + '"' + (b.id === S.brand ? ' style="background:' + b.theme_color + ';border-color:' + b.theme_color + '"' : '') + '><b>' + esc(b.short_name) + '</b><span class="num">' + fmt(w.balance) + ' แต้ม</span></button>';
-      }).join('') + '</div>' : '') + '</header>';
+      (S.me && S.me.member ? '<button class="icon-btn" data-a="tab" data-v="profile" aria-label="ข้อมูลของฉัน">' + I.user + '</button>' : '<span class="icon-btn"></span>') + '</div>' + '</header>';
   }
   function nav() {
     const t = [['home', 'บัตร', I.card], ['coupons', 'คูปอง', I.ticket], ['rewards', 'แลกแต้ม', I.gift], ['history', 'ประวัติ', I.receipt]];
@@ -137,14 +133,13 @@
     const ready = S.coupons.filter((c) => c.status === 'ready').sort((x, y) => x.expiresAt - y.expiresAt);
     const canRedeem = S.rewards.filter((r) => r.points_cost <= w.balance).length;
     return '<div class="card idcard"><span class="muted" style="font-size:13px">คุณ' + esc(m.name) + ' · สาขาประจำ ' + esc(branchName(m.homeBranch)) + '</span>' +
-      '<span style="font-size:12px;font-weight:600;color:var(--ai)">เลขที่สมาชิก · ใช้ได้ทุกแบรนด์ในเครือ</span><div class="row"><span class="id">' + esc(m.id) + '</span><button class="btn sm" data-a="copy" data-v="' + esc(m.id) + '">คัดลอก</button></div></div>' +
+      '<span style="font-size:12px;font-weight:600;color:var(--ai)">เลขที่สมาชิก</span><div class="row"><span class="id">' + esc(m.id) + '</span><button class="btn sm" data-a="copy" data-v="' + esc(m.id) + '">คัดลอก</button></div></div>' +
       '<div class="wallet"><div class="row" style="justify-content:flex-start"><span class="tier ' + t.name + '">' + t.name + '</span><small>' + esc(b.short_name) + ' · สมาชิกตั้งแต่ ' + date(m.joinedAt) + '</small></div>' +
       '<div><small>แต้ม ' + esc(b.short_name) + ' ที่ใช้ได้</small><div><span class="pts num">' + fmt(w.balance) + '</span> แต้ม</div></div>' +
       '<div style="display:flex;flex-direction:column;gap:6px"><div class="bar"><i style="width:' + pct + '%"></i></div><div class="row"><small>' + (t.next ? 'อีก ' + fmt(t.need) + ' แต้ม ขึ้นระดับ ' + t.next : 'ระดับสูงสุดแล้ว') + '</small><small class="num">' + fmt(t.max) + '</small></div></div>' +
       (w.nextExpiry ? '<small style="color:#F6C9AF">แต้มชุดแรกจะหมดอายุ ' + date(w.nextExpiry) + '</small>' : '') + '</div>' +
       '<div class="card qr"><b style="font-family:var(--f-display)">ยื่น QR ให้พนักงานสแกนก่อนชำระเงิน</b><div class="qr-img" id="qr-img">' + qrHtml() + '</div>' +
       '<span class="muted" style="letter-spacing:1px">' + esc(m.id) + '</span><span class="muted" style="font-size:12px">QR เปลี่ยนใน <b id="qr-left" class="num">' + qrLeft() + '</b> วินาที เพื่อความปลอดภัย</span></div>' +
-      '<div class="card allw"><b style="font-size:14px">แต้มแยกตามแบรนด์ (ใช้ข้ามแบรนด์ไม่ได้)</b>' + S.brands.map((x) => '<div class="r"><span class="sw" style="background:' + x.theme_color + '"></span>' + esc(x.name) + '<b class="num">' + fmt((S.me.wallets[x.id] || {}).balance) + '</b></div>').join('') + '</div>' +
       '<div class="stats"><button data-a="tab" data-v="history"><b>' + I.receipt + '</b><span>บิลและแต้ม</span></button><button data-a="tab" data-v="coupons"><b style="color:var(--ai)">' + ready.length + '</b><span>คูปองพร้อมใช้</span></button><button data-a="tab" data-v="rewards"><b>' + canRedeem + '</b><span>รางวัลที่แลกได้</span></button></div>' +
       (ready.length ? '<div class="sec"><b>คูปองใกล้หมดอายุ</b><button class="link" data-a="tab" data-v="coupons">ดูทั้งหมด</button></div>' + couponHtml(ready[0], true) : '');
   }
@@ -169,7 +164,7 @@
         return '<div class="reward"><div class="art">' + esc(r.name) + '</div><div class="in"><b style="font-size:14px">' + esc(r.name) + '</b><span class="c num">' + fmt(r.points_cost) + ' แต้ม</span>' +
           '<button class="btn sm" style="margin-top:auto" data-a="pick" data-v="' + r.id + '"' + (lack > 0 || out ? ' disabled' : '') + '>' + (out ? 'หมดแล้ว' : lack > 0 ? 'ขาดอีก ' + fmt(lack) : 'แลกเลย') + '</button></div></div>';
       }).join('') + '</div>' : '<div class="empty">ยังไม่มีของรางวัล</div>') +
-      '<p class="muted" style="font-size:12px;margin:0">แลกแล้วได้เป็นคูปอง ใช้ได้ภายใน 30 วัน · ใช้แต้มของแบรนด์นี้เท่านั้น</p>';
+      '<p class="muted" style="font-size:12px;margin:0">แลกแล้วได้เป็นคูปอง ใช้ได้ภายใน 30 วัน</p>';
   }
   function historyView() {
     const body = S.hist === 'bills'
@@ -188,8 +183,8 @@
     const m = S.me.member; const links = S.me.links || [];
     return '<div class="card"><h3>ข้อมูลของฉัน</h3><div class="kv"><span>ชื่อ</span><span>' + esc(m.name) + '</span></div><div class="kv"><span>เบอร์โทร</span><span>***-***-' + esc(String(m.phone).slice(-4)) + '</span></div>' +
       '<div class="kv"><span>สาขาประจำ</span><span>' + esc(branchName(m.homeBranch)) + '</span></div><div class="kv"><span>เลขที่สมาชิก</span><span>' + esc(m.id) + '</span></div></div>' +
-      '<div class="card"><h3>รับข่าวสารแยกตามแบรนด์</h3><small class="muted">เลือกได้ว่าอยากรับโปรโมชั่นทาง LINE จากร้านไหน เปลี่ยนได้ตลอด</small>' +
-      S.brands.map((b) => { const l = links.find((x) => x.brand_id === b.id) || {};
+      '<div class="card"><h3>รับข่าวสารและโปรโมชั่น</h3><small class="muted">เปิดหรือปิดได้ตลอด</small>' +
+      [brand()].map((b) => { const l = links.find((x) => x.brand_id === b.id) || {};
         return '<label class="check" style="padding:10px 0;border-top:1px solid var(--line);align-items:center"><input type="checkbox" data-a="consent" data-v="' + b.id + '"' + (l.marketing_consent ? ' checked' : '') + ' style="accent-color:' + b.theme_color + '"><span style="flex:1"><b>' + esc(b.name) + '</b><br><small class="muted">' + (l.follow_status === 'follow' ? 'เป็นเพื่อนกับ OA แล้ว' : l.follow_status === 'blocked' ? 'บล็อก OA อยู่' : 'ยังไม่ได้เพิ่มเพื่อน OA นี้') + '</small></span></label>'; }).join('') +
       '</div><button class="btn ghost" data-a="tab" data-v="home">กลับไปที่บัตร</button>';
   }
@@ -197,7 +192,7 @@
     const b = brand(); const r = S.reg;
     if (!r.branchId && b.branches[0]) r.branchId = b.branches[0].id;
     return head('สมัครสมาชิก · ' + b.short_name) + '<main class="body" style="padding-bottom:24px">' +
-      '<div class="hero"><b>สมัครวันนี้ รับ ' + fmt(b.welcome_points) + ' แต้มทันที</b><span style="font-size:13px">+ คูปองส่วนลดบิลแรก · สมัครครั้งเดียวใช้ได้ทุกแบรนด์ในเครือ</span></div>' +
+      '<div class="hero"><b>สมัครวันนี้ รับ ' + fmt(b.welcome_points) + ' แต้มทันที</b><span style="font-size:13px">+ คูปองส่วนลดสำหรับสมาชิกใหม่</span></div>' +
       '<div class="field"><label for="r-name">ชื่อ - นามสกุล</label><input id="r-name" data-m="reg.name" value="' + esc(r.name) + '" autocomplete="name"></div>' +
       (S.cfg && S.cfg.requireOtp
         ? '<div class="row2"><div class="field"><label for="r-phone">เบอร์โทรศัพท์</label><input id="r-phone" data-m="reg.phone" inputmode="tel" maxlength="10" value="' + esc(r.phone) + '" autocomplete="tel"></div><button class="btn' + (r.otpSent ? ' ghost' : '') + '" data-a="otp">' + (r.otpSent ? 'ส่งอีกครั้ง' : 'ขอ OTP') + '</button></div>' +
@@ -231,7 +226,6 @@
   const A = {
     reload: () => location.reload(),
     close: () => { if (S.inClient && window.liff) window.liff.closeWindow(); else history.back(); },
-    brand: async (v) => { S.brand = v; S.showCode = null; S.rcat = 'all'; applyTheme(); await refresh(); },
     tab: async (v) => { S.tab = v; S.pick = null; S.showCode = null; await loadTab(); render(); window.scrollTo(0, 0); },
     copy: (v) => { (navigator.clipboard ? navigator.clipboard.writeText(v) : Promise.reject()).then(() => toast('คัดลอก ' + v + ' แล้ว'), () => toast('เลขสมาชิก ' + v)); },
     code: (v) => { S.showCode = S.showCode === v ? null : v; render(); },

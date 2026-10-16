@@ -191,7 +191,7 @@ export async function register(db, f) {
   }
   let coupon = null;
   if (brand.welcome_template_id) coupon = await issueCoupon(db, { memberId: id, templateId: brand.welcome_template_id, source: 'welcome', sourceRef: f.brandId });
-  await queueMessage(db, { brandId: f.brandId, lineUserId: f.lineUserId, kind: 'welcome', data: { memberId: id, pts: welcomePts, coupon: coupon ? 'ส่วนลด 10% บิลแรก' : null } });
+  await queueMessage(db, { brandId: f.brandId, lineUserId: f.lineUserId, kind: 'welcome', data: { memberId: id, pts: welcomePts, coupon: coupon ? (await db.one('SELECT title FROM coupon_templates WHERE id = $1', [coupon.template_id])).title : null } });
   await audit(db, { type: 'member', id }, 'register', { type: 'member', id }, 'สมัครผ่าน OA ' + brand.short_name);
   return { member: m, linked: false, welcomePoints: welcomePts, coupon };
 }

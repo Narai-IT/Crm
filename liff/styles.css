@@ -28,12 +28,6 @@ h1, h2, h3 { font-family: var(--f-display); font-weight: 600; margin: 0; }
 .head-row { height: 52px; display: flex; align-items: center; padding: 0 6px; }
 .head-row .t { flex: 1; text-align: center; font-weight: 600; }
 .icon-btn { width: 44px; height: 44px; border: 0; background: transparent; display: grid; place-items: center; border-radius: 22px; }
-.bswitch { display: flex; gap: 6px; padding: 8px 14px 10px; }
-.bswitch button { flex: 1; min-height: 46px; border-radius: 12px; border: 1px solid var(--line); background: var(--card); display: flex; flex-direction: column; align-items: center; justify-content: center; line-height: 1.2; padding: 4px; }
-.bswitch button b { font-size: 13px; }
-.bswitch button span { font-size: 11px; color: var(--muted); }
-.bswitch button[aria-pressed="true"] { background: var(--a); border-color: var(--a); color: #fff; }
-.bswitch button[aria-pressed="true"] span { color: #fff; }
 
 .body { flex: 1; padding: 14px 14px calc(88px + env(safe-area-inset-bottom, 0px)); display: flex; flex-direction: column; gap: 14px; }
 .card { background: var(--card); border: 1px solid var(--line); border-radius: 16px; padding: 14px; display: flex; flex-direction: column; gap: 6px; }
@@ -62,9 +56,6 @@ h1, h2, h3 { font-family: var(--f-display); font-weight: 600; margin: 0; }
 .stats button { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 10px; text-align: left; }
 .stats b { font-family: var(--f-display); font-size: 20px; display: block; }
 .stats span { font-size: 12px; color: var(--muted); }
-.allw .r { display: flex; align-items: center; gap: 8px; font-size: 14px; padding: 2px 0; }
-.allw .sw { width: 10px; height: 10px; border-radius: 5px; flex-shrink: 0; }
-.allw .r b { margin-left: auto; font-family: var(--f-display); }
 
 .seg { display: flex; gap: 4px; background: #F3ECE7; border-radius: 999px; padding: 4px; }
 .seg button { flex: 1; min-height: 38px; border: 0; border-radius: 999px; background: transparent; font-size: 14px; font-weight: 600; color: var(--muted); padding: 0 10px; white-space: nowrap; }

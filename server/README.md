@@ -76,7 +76,7 @@ server/
     services/line.js           ตรวจลายเซ็น webhook, ตอบ Rich Menu, สร้าง Flex, ส่งผ่าน outbox
     routes/                    liff · pos · admin · webhook · dev
     worker.js                  ส่งข้อความหลัง commit, แต้ม/คูปองหมดอายุ
-  test/api.test.js             ทดสอบ flow หลัก 10 กรณี
+  test/api.test.js             ทดสอบ flow หลัก 11 กรณี
 ```
 
 ## API
@@ -85,7 +85,7 @@ server/
 |---|---|---|
 | ลูกค้า (LIFF) | `Authorization: Bearer <LINE ID token>` | `GET /api/liff/me` · `POST /api/liff/otp` · `POST /api/liff/register` · `GET /api/liff/qr` · `GET /api/liff/coupons` · `POST /api/liff/coupons/claim` · `GET /api/liff/rewards` · `POST /api/liff/redemptions` (ต้องมี `Idempotency-Key`) · `GET /api/liff/bills` · `GET /api/liff/ledger` · `PATCH /api/liff/consents` · `POST /api/liff/tax-invoice-requests` |
 | หน้าร้าน | `X-Api-Key` ของเครื่อง (ผูกกับสาขา) | `POST /api/pos/members/resolve` · `POST /api/pos/transactions` (เลขบิลกันซ้ำ) · `POST /api/pos/refunds` · `POST /api/pos/point-requests` · `GET /api/pos/bills` |
-| หลังบ้าน | `POST /api/admin/login` → `Authorization: Bearer <token>` | dashboard · members · point-adjustments (+approve/reject) · earn-rules · rewards · campaigns (+preview) · branches · staff · audit-logs · line-channels |
+| หลังบ้าน (หน้าเว็บ `/admin/`) | `POST /api/admin/login` → `Authorization: Bearer <token>` | dashboard · members · point-adjustments (+approve/reject) · earn-rules · rewards · coupons · welcome-coupon · promo-codes · campaigns (+preview) · branches · staff · audit-logs · line-channels |
 | LINE | `X-Line-Signature` | `POST /webhooks/line/{narai|wakame|humlai}` |
 
 ตัวอย่างเรียกจาก POS:
