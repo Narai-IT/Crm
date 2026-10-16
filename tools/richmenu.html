@@ -1,0 +1,203 @@
+<!doctype html>
+<html lang="th">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Rich Menu Maker</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Thai:wght@400;500;600&family=Prompt:wght@500;600;700&display=swap">
+<style>
+  :root { --bg: #F4F1EE; --card: #fff; --ink: #2A1D17; --muted: #6B5146; --line: #E6DCD5; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font-family: 'IBM Plex Sans Thai', Tahoma, sans-serif; font-size: 15px; }
+  .wrap { max-width: 1280px; margin: 0 auto; padding: 24px 16px 48px; display: grid; grid-template-columns: 320px minmax(0, 1fr); gap: 24px; align-items: start; }
+  h1 { font-family: 'Prompt', Tahoma, sans-serif; font-size: 22px; margin: 0 0 4px; }
+  .panel { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 16px; display: flex; flex-direction: column; gap: 12px; }
+  label { font-size: 13px; font-weight: 600; display: flex; flex-direction: column; gap: 4px; }
+  input, select { font: inherit; min-height: 38px; border: 1px solid var(--line); border-radius: 8px; padding: 4px 8px; background: #fff; }
+  input[type=color] { padding: 2px; width: 100%; }
+  .row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  button { font: inherit; font-weight: 600; min-height: 44px; border: 0; border-radius: 10px; background: #C7481A; color: #fff; cursor: pointer; }
+  button.ghost { background: #FDEBE1; color: #8A3A16; }
+  canvas { width: 100%; height: auto; border-radius: 10px; box-shadow: 0 6px 24px rgba(0,0,0,.12); background: #fff; }
+  .note { font-size: 13px; color: var(--muted); line-height: 1.5; }
+  .status { font-size: 13px; font-weight: 600; }
+  table { border-collapse: collapse; font-size: 13px; width: 100%; }
+  td, th { border-bottom: 1px solid var(--line); padding: 6px 4px; text-align: left; }
+  @media (max-width: 860px) { .wrap { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="panel">
+    <div><h1>Rich Menu</h1><div class="note">ขนาด 2500×1686 (LINE แบบใหญ่) · ช่องใหญ่ซ้าย 1 + ขวาบน 1 + ขวาล่าง 2</div></div>
+    <label>แบรนด์
+      <select id="brand">
+        <option value="humlai">ข้าวมันไก่หำไหล</option>
+        <option value="narai">Narai</option>
+        <option value="wakame">Wakame</option>
+      </select>
+    </label>
+    <div class="row">
+      <label>สีหลัก<input type="color" id="accent"></label>
+      <label>สีพื้นช่องโปร<input type="color" id="dark"></label>
+    </div>
+    <label>โลโก้ (ไม่ใส่ = ใช้ของเดิม)<input type="file" id="logo" accept="image/*"></label>
+    <label>รูปเมนูช่องโปรโมชั่น<input type="file" id="photo" accept="image/*"></label>
+    <label>ข้อความใต้ "โปรโมชั่น"<input id="promoSub" value="โปรเดือนนี้"></label>
+    <button id="dl">ดาวน์โหลดรูป (JPEG ไม่เกิน 1 MB)</button>
+    <button class="ghost" id="dlpng">ดาวน์โหลด PNG</button>
+    <div class="status" id="status">กำลังโหลดฟอนต์…</div>
+    <div class="note">ต้องต่ออินเทอร์เน็ตเพื่อโหลดฟอนต์ Prompt ถ้าตัวอักษรดูไม่ใช่ Prompt ให้รอสักครู่แล้วกดเปลี่ยนแบรนด์ไปมาหนึ่งครั้ง</div>
+  </div>
+  <div style="display:flex;flex-direction:column;gap:16px;min-width:0">
+    <canvas id="c" width="2500" height="1686" aria-label="ตัวอย่าง Rich Menu"></canvas>
+    <div class="panel">
+      <b>ตั้งค่าแต่ละช่องใน LINE OA Manager (เทมเพลตใหญ่: ซ้าย 1 · ขวาบน 1 · ขวาล่าง 2)</b>
+      <table id="actions"></table>
+    </div>
+  </div>
+</div>
+<script src="richmenu-assets.js"></script>
+<script>
+(function () {
+  const W = 2500, H = 1686;
+  const BRANDS = {
+    humlai: { name: 'ข้าวมันไก่หำไหล', initial: 'ห', accent: '#C7481A', dark: '#2A1D17', bg: '#FFF6EF', soft: '#FDEBE1', icon: '#B8431A', border: '#F6D9C8', muted: '#6B5146', promoText: '#F3E3D8' },
+    narai:  { name: 'Narai', initial: 'N', accent: '#1F5A85', dark: '#13212B', bg: '#F1F6FA', soft: '#E4EEF6', icon: '#1F5A85', border: '#CFE0EE', muted: '#4A5C6A', promoText: '#D6E4EF' },
+    wakame: { name: 'Wakame', initial: 'W', accent: '#2F6B4F', dark: '#16241D', bg: '#F1F7F3', soft: '#E3F0E8', icon: '#2F6B4F', border: '#CFE4D7', muted: '#4A5E53', promoText: '#D8EADF' }
+  };
+  const ICONS = {
+    scan: ['M3 7V5a2 2 0 0 1 2-2h2', 'M17 3h2a2 2 0 0 1 2 2v2', 'M21 17v2a2 2 0 0 1-2 2h-2', 'M7 21H5a2 2 0 0 1-2-2v-2', 'M7 12h10'],
+    qr: ['M3 3h7v7H3z', 'M14 3h7v7h-7z', 'M3 14h7v7H3z', 'M14 14h3v3h-3z', 'M21 14v.01', 'M14 21h.01', 'M17 21h4v-4'],
+    mega: ['M3 11l15-6v14L3 13z', 'M7 13v5a2 2 0 0 0 4 0v-3', 'M21 9v4'],
+    pin: ['M12 22s7-6.5 7-12a7 7 0 0 0-14 0c0 5.5 7 12 7 12z', 'M14.5 10a2.5 2.5 0 1 1-5 0a2.5 2.5 0 1 1 5 0'],
+    chat: ['M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12z', 'M9 11h.01', 'M12 11h.01', 'M15 11h.01']
+  };
+  const DISPLAY = "'Prompt', 'IBM Plex Sans Thai', Tahoma, sans-serif";
+  const BODY = "'IBM Plex Sans Thai', 'Prompt', Tahoma, sans-serif";
+  const $ = (id) => document.getElementById(id);
+  const cv = $('c'); const ctx = cv.getContext('2d');
+  const state = { brand: 'humlai', logo: null, photo: null, custom: {} };
+
+  function loadImg(src) { return new Promise((ok) => { if (!src) return ok(null); const i = new Image(); i.onload = () => ok(i); i.onerror = () => ok(null); i.src = src; }); }
+  function rr(x, y, w, h, r) { ctx.beginPath(); ctx.roundRect(x, y, w, h, r); }
+  function icon(name, x, y, size, color, width) {
+    ctx.save(); ctx.translate(x, y); ctx.scale(size / 24, size / 24);
+    ctx.strokeStyle = color; ctx.lineWidth = width || 2; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+    ICONS[name].forEach((d) => ctx.stroke(new Path2D(d)));
+    ctx.restore();
+  }
+  function cover(img, x, y, w, h) {
+    const s = Math.max(w / img.width, h / img.height); const sw = w / s; const sh = h / s;
+    ctx.drawImage(img, (img.width - sw) / 2, (img.height - sh) / 2, sw, sh, x, y, w, h);
+  }
+  function text(t, x, y, font, color, align) { ctx.font = font; ctx.fillStyle = color; ctx.textAlign = align || 'left'; ctx.textBaseline = 'alphabetic'; ctx.fillText(t, x, y); }
+
+  async function draw() {
+    const b = Object.assign({}, BRANDS[state.brand], state.custom);
+    const assets = (window.RICHMENU_ASSETS || {})[state.brand] || {};
+    const logo = state.logo || await loadImg(assets.logo);
+    const photo = state.photo || await loadImg(assets.photo);
+    const P = 36, G = 32;
+    const colW = (W - P * 2 - G) / 2, rowH = (H - P * 2 - G) / 2;
+    const L = { x: P, y: P, w: colW, h: H - P * 2 };
+    const TR = { x: P + colW + G, y: P, w: colW, h: rowH };
+    const half = (colW - G) / 2;
+    const BR1 = { x: TR.x, y: P + rowH + G, w: half, h: rowH };
+    const BR2 = { x: TR.x + half + G, y: BR1.y, w: half, h: rowH };
+
+    ctx.clearRect(0, 0, W, H);
+    ctx.fillStyle = b.bg; ctx.fillRect(0, 0, W, H);
+
+    // ช่องใหญ่ซ้าย: สมาชิก
+    rr(L.x, L.y, L.w, L.h, 56); ctx.fillStyle = b.accent; ctx.fill();
+    const pad = 88;
+    ctx.beginPath(); ctx.arc(L.x + pad + 150, L.y + pad + 150, 150, 0, Math.PI * 2); ctx.fillStyle = '#FFFFFF'; ctx.fill();
+    if (logo) { ctx.save(); ctx.beginPath(); ctx.arc(L.x + pad + 150, L.y + pad + 150, 140, 0, Math.PI * 2); ctx.clip(); cover(logo, L.x + pad + 10, L.y + pad + 10, 280, 280); ctx.restore(); }
+    else text(b.initial, L.x + pad + 150, L.y + pad + 200, '700 150px ' + DISPLAY, b.accent, 'center');
+    // ปุ่มเปิดบัตร (ล่างสุด)
+    const btnH = 76 + 80, btnY = L.y + L.h - 96 - btnH;
+    ctx.font = '600 76px ' + DISPLAY; const btnLabel = 'เปิดบัตร / สมัคร'; const btnW = 64 + 84 + 28 + ctx.measureText(btnLabel).width + 64;
+    rr(L.x + pad, btnY, btnW, btnH, btnH / 2); ctx.fillStyle = '#FFFFFF'; ctx.fill();
+    icon('qr', L.x + pad + 64, btnY + (btnH - 84) / 2, 84, b.accent, 2.2);
+    text(btnLabel, L.x + pad + 64 + 84 + 28, btnY + btnH / 2 + 27, '600 76px ' + DISPLAY, b.accent);
+    // กล่องแนะนำ QR
+    const tipH = 2 * 78 + 56, tipY = btnY - 72 - tipH;
+    rr(L.x + pad, tipY, L.w - pad * 2, tipH, 36); ctx.fillStyle = 'rgba(0,0,0,0.18)'; ctx.fill();
+    icon('scan', L.x + pad + 40, tipY + 40, 80, '#FFFFFF', 2);
+    text('แสดง QR ให้พนักงานสแกนที่ร้าน', L.x + pad + 148, tipY + 92, '400 60px ' + BODY, '#FFFFFF');
+    text('รับแต้มทันที', L.x + pad + 148, tipY + 92 + 78, '400 60px ' + BODY, '#FFFFFF');
+    // หัวข้อ
+    text('คูปอง · แลกของรางวัล', L.x + pad, tipY - 32 - 10, '500 72px ' + BODY, '#FFFFFF');
+    text('บัตรสมาชิก · สะสมแต้ม', L.x + pad, tipY - 32 - 10 - 97, '500 72px ' + BODY, '#FFFFFF');
+    text('สมาชิก', L.x + pad, tipY - 32 - 10 - 97 - 120, '700 192px ' + DISPLAY, '#FFFFFF');
+
+    // ขวาบน: โปรโมชั่น
+    ctx.save(); rr(TR.x, TR.y, TR.w, TR.h, 56); ctx.clip();
+    ctx.fillStyle = b.dark; ctx.fillRect(TR.x, TR.y, TR.w, TR.h);
+    const pw = 540;
+    if (photo) cover(photo, TR.x + TR.w - pw, TR.y, pw, TR.h);
+    else { ctx.fillStyle = b.soft; ctx.fillRect(TR.x + TR.w - pw, TR.y, pw, TR.h); text(b.name, TR.x + TR.w - pw / 2, TR.y + TR.h / 2 + 30, '700 80px ' + DISPLAY, b.accent, 'center'); }
+    ctx.restore();
+    ctx.beginPath(); ctx.arc(TR.x + 72 + 110, TR.y + 72 + 110, 110, 0, Math.PI * 2); ctx.fillStyle = b.accent; ctx.fill();
+    icon('mega', TR.x + 72 + 50, TR.y + 72 + 50, 120, '#FFFFFF', 1.8);
+    text(state.promoSub, TR.x + 72, TR.y + TR.h - 72, '400 64px ' + BODY, b.promoText);
+    text('โปรโมชั่น', TR.x + 72, TR.y + TR.h - 72 - 64 - 34, '600 120px ' + DISPLAY, '#FFFFFF');
+
+    // ขวาล่าง: สาขา / ติชม
+    [[BR1, 'pin', 'สาขา', 'เวลาเปิด-ปิด'], [BR2, 'chat', 'ติชม', 'ติดต่อร้าน']].forEach(([r, ic, t1, t2]) => {
+      rr(r.x + 3, r.y + 3, r.w - 6, r.h - 6, 56); ctx.fillStyle = '#FFFFFF'; ctx.fill(); ctx.lineWidth = 6; ctx.strokeStyle = b.border; ctx.stroke();
+      ctx.beginPath(); ctx.arc(r.x + 60 + 110, r.y + 60 + 110, 110, 0, Math.PI * 2); ctx.fillStyle = b.soft; ctx.fill();
+      icon(ic, r.x + 60 + 50, r.y + 60 + 50, 120, b.icon, 1.8);
+      text(t2, r.x + 60, r.y + r.h - 64, '400 60px ' + BODY, b.muted);
+      text(t1, r.x + 60, r.y + r.h - 64 - 60 - 30, '600 92px ' + DISPLAY, '#2A1D17');
+    });
+
+    renderActions();
+  }
+
+  function renderActions() {
+    const liff = 'https://liff.line.me/<LIFF_ID>?brand=' + state.brand;
+    $('actions').innerHTML = '<tr><th>ช่อง</th><th>ประเภท</th><th>ค่า</th></tr>' +
+      [['ซ้าย (สมาชิก)', 'ลิงก์', liff], ['ขวาบน (โปรโมชั่น)', 'ข้อความ', 'โปรโมชั่น'], ['ขวาล่างซ้าย (สาขา)', 'ข้อความ', 'สาขา'], ['ขวาล่างขวา (ติชม)', 'ข้อความ', 'ติชม']]
+        .map((r) => '<tr><td>' + r[0] + '</td><td>' + r[1] + '</td><td><code>' + r[2].replace(/</g, '&lt;') + '</code></td></tr>').join('');
+  }
+
+  function save(blob, name) {
+    const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name; document.body.appendChild(a); a.click();
+    setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+  }
+  const toBlob = (type, q) => new Promise((ok) => cv.toBlob(ok, type, q));
+  $('dl').onclick = async () => {
+    let q = 0.92, blob = await toBlob('image/jpeg', q);
+    while (blob.size > 1000 * 1000 && q > 0.5) { q -= 0.07; blob = await toBlob('image/jpeg', q); }
+    $('status').textContent = 'ไฟล์ JPEG ' + Math.round(blob.size / 1024) + ' KB (คุณภาพ ' + Math.round(q * 100) + '%)';
+    save(blob, 'richmenu-' + state.brand + '.jpg');
+  };
+  $('dlpng').onclick = async () => {
+    const blob = await toBlob('image/png');
+    $('status').textContent = 'ไฟล์ PNG ' + Math.round(blob.size / 1024) + ' KB' + (blob.size > 1000 * 1000 ? ' · เกิน 1 MB ที่ LINE รับ ให้ใช้ปุ่ม JPEG แทน' : '');
+    save(blob, 'richmenu-' + state.brand + '.png');
+  };
+  function syncInputs() { const b = Object.assign({}, BRANDS[state.brand], state.custom); $('accent').value = b.accent; $('dark').value = b.dark; }
+  $('brand').onchange = (e) => { state.brand = e.target.value; state.custom = {}; state.logo = null; state.photo = null; $('logo').value = ''; $('photo').value = ''; syncInputs(); draw(); };
+  $('accent').oninput = (e) => { state.custom.accent = e.target.value; draw(); };
+  $('dark').oninput = (e) => { state.custom.dark = e.target.value; draw(); };
+  $('promoSub').oninput = (e) => { state.promoSub = e.target.value; draw(); };
+  const fileImg = (input, key) => { input.onchange = () => { const f = input.files[0]; if (!f) return; const r = new FileReader(); r.onload = async () => { state[key] = await loadImg(r.result); draw(); }; r.readAsDataURL(f); }; };
+  fileImg($('logo'), 'logo'); fileImg($('photo'), 'photo');
+
+  state.promoSub = $('promoSub').value;
+  const qs = new URLSearchParams(location.search).get('brand');
+  if (BRANDS[qs]) { state.brand = qs; $('brand').value = qs; }
+  syncInputs();
+  draw();
+  Promise.all(['700 192px Prompt', '600 120px Prompt', '500 72px "IBM Plex Sans Thai"', '400 60px "IBM Plex Sans Thai"'].map((f) => document.fonts.load(f, 'สมาชิก')))
+    .then(() => document.fonts.ready).then(() => { $('status').textContent = document.fonts.check('700 192px Prompt', 'ส') ? 'พร้อมดาวน์โหลด (ฟอนต์ Prompt)' : 'ยังโหลดฟอนต์ Prompt ไม่ได้ · ตรวจอินเทอร์เน็ต'; draw(); })
+    .catch(() => { $('status').textContent = 'ยังโหลดฟอนต์ Prompt ไม่ได้ · ตรวจอินเทอร์เน็ต'; });
+})();
+</script>
+</body>
+</html>
