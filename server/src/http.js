@@ -1,6 +1,6 @@
 // router เล็ก ๆ บน node:http (ไม่ต้องพึ่ง framework)
 import { readFile, stat } from 'node:fs/promises';
-import { extname, join, normalize } from 'node:path';
+import { dirname, extname, join, normalize } from 'node:path';
 
 export class HttpError extends Error {
   constructor(status, code, message) { super(message || code); this.status = status; this.code = code; }
@@ -43,6 +43,8 @@ export function send(res, status, body, headers = {}) {
 }
 
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.json': 'application/json', '.png': 'image/png', '.svg': 'image/svg+xml', '.ico': 'image/x-icon' };
+// หน้า HTML: ห้าม cache และต่อท้ายไฟล์ .js/.css ด้วยเวอร์ชัน (เวลาแก้ไขไฟล์) ทุกครั้งที่ส่ง
+// แอป LINE และ Cloudflare จึงต้องโหลดไฟล์ใหม่ทันทีหลังอัปเดต ไม่ค้างหน้าเก่า
 export async function serveStatic(root, urlPath, res) {
   const rel = normalize(decodeURIComponent(urlPath)).replace(/^([/\\])+/, '');
   if (rel.startsWith('..')) return false;
@@ -50,8 +52,21 @@ export async function serveStatic(root, urlPath, res) {
   try {
     const s = await stat(file);
     if (s.isDirectory()) file = join(file, 'index.html');
-    const data = await readFile(file);
-    res.writeHead(200, { 'content-type': MIME[extname(file)] || 'application/octet-stream', 'cache-control': 'no-cache' });
+    let data = await readFile(file);
+    const ext = extname(file);
+    const headers = { 'content-type': MIME[ext] || 'application/octet-stream', 'cache-control': 'no-cache' };
+    if (ext === '.html') {
+      const dir = dirname(file);
+      let html = data.toString('utf8');
+      const refs = [...new Set([...html.matchAll(/(?:src|href)="([\w.-]+\.(?:js|css))"/g)].map((m) => m[1]))];
+      for (const r of refs) {
+        const v = await stat(join(dir, r)).then((x) => Math.floor(x.mtimeMs).toString(36), () => null);
+        if (v) html = html.split('"' + r + '"').join('"' + r + '?v=' + v + '"');
+      }
+      data = Buffer.from(html);
+      headers['cache-control'] = 'no-store, max-age=0';
+    }
+    res.writeHead(200, headers);
     res.end(data);
     return true;
   } catch { return false; }
