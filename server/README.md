@@ -106,4 +106,4 @@ curl -X POST http://localhost:3000/api/pos/transactions \
 4. ตั้ง Webhook URL ของแต่ละ OA เป็น `https://<โดเมน>/webhooks/line/<brand>` (ต้องเป็น HTTPS)
 5. ต่อผู้ให้บริการ SMS สำหรับ OTP (ตอนนี้งาน `sms_otp` เข้าคิวไว้แต่ยังไม่ส่ง)
 6. ใช้ PostgreSQL แบบ managed (เช่น Cloud SQL / RDS / Supabase ใน region กรุงเทพหรือสิงคโปร์) เปิด backup อัตโนมัติ
-7. หน้า LIFF จริงต้องเรียก `liff.init()` แล้วส่ง `liff.getIDToken()` เป็น Bearer token (หน้าเดโมปัจจุบันใช้ header ทดสอบแทน)
+7. หน้า LIFF จริงอยู่ที่ `/liff/` (โฟลเดอร์ `liff/`) ใช้ `liff.getIDToken()` เป็น Bearer token · ขั้นตอนตั้งค่าทั้งหมดอยู่ใน [docs/LINE-SETUP.md](../docs/LINE-SETUP.md)

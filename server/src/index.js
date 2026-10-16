@@ -12,15 +12,17 @@ import pos from './routes/pos.js';
 import admin from './routes/admin.js';
 import webhook from './routes/webhook.js';
 import dev from './routes/dev.js';
+import pub from './routes/public.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const STATIC_ROOT = process.env.STATIC_ROOT || join(here, '..', '..', 'demo');
+const LIFF_ROOT = process.env.LIFF_ROOT || join(here, '..', '..', 'liff');
 
 export function buildServer() {
   const r = createRouter();
   r.get('/api/health', async () => { await pool.query('SELECT 1'); return { ok: true, dev: DEV }; });
   r.get('/api/config', async () => ({ dev: DEV, liffId: process.env.LIFF_ID || null }));
-  liff(r); pos(r); admin(r); webhook(r);
+  liff(r); pos(r); admin(r); webhook(r); pub(r);
   if (DEV) dev(r);
 
   return http.createServer(async (req, res) => {
@@ -28,6 +30,9 @@ export function buildServer() {
     const path = url.pathname;
     const isApi = path.startsWith('/api/') || path.startsWith('/webhooks/');
     if (!isApi) {
+      // หน้า LIFF ของลูกค้า: /liff/ (ตั้งเป็น Endpoint URL ของ LIFF app)
+      if (path === '/liff') { res.writeHead(302, { location: '/liff/' + url.search }); return res.end(); }
+      if (path.startsWith('/liff/') && req.method === 'GET' && (await serveStatic(LIFF_ROOT, path.slice(5), res))) return;
       if (req.method === 'GET' && (await serveStatic(STATIC_ROOT, path, res))) return;
       return send(res, 404, { error: 'not_found' });
     }

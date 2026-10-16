@@ -23,8 +23,11 @@ export async function liffUser(req) {
     idTokenCache.set(tok, u);
     return u;
   }
-  if (DEV && req.headers['x-dev-line-user']) {
-    return { userId: String(req.headers['x-dev-line-user']), displayName: decodeURIComponent(String(req.headers['x-dev-line-name'] || 'ลูกค้าทดลอง')) };
+  // โหมดทดสอบ: สวมบทผู้ใช้ทดสอบได้เฉพาะ ID ที่ไม่ใช่รูปแบบ LINE จริง (U + hex 32 ตัว)
+  // จึงสวมเป็นลูกค้าจริงไม่ได้ แม้ path /api/liff จะเปิดสาธารณะผ่าน Cloudflare
+  const devId = String(req.headers['x-dev-line-user'] || '');
+  if (DEV && devId && !/^U[0-9a-f]{32}$/.test(devId)) {
+    return { userId: devId, displayName: decodeURIComponent(String(req.headers['x-dev-line-name'] || 'ลูกค้าทดลอง')) };
   }
   throw unauthorized('ต้องเปิดผ่าน LINE');
 }
