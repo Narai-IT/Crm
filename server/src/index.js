@@ -3,7 +3,7 @@ import http from 'node:http';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { createRouter, readBody, send, serveStatic, HttpError } from './http.js';
-import { DEV } from './util.js';
+import { DEV, REQUIRE_OTP } from './util.js';
 import { logApi, kindOf } from './apilog.js';
 import { startWorker, drainOutbox } from './worker.js';
 import { pool } from './db.js';
@@ -21,7 +21,7 @@ const LIFF_ROOT = process.env.LIFF_ROOT || join(here, '..', '..', 'liff');
 export function buildServer() {
   const r = createRouter();
   r.get('/api/health', async () => { await pool.query('SELECT 1'); return { ok: true, dev: DEV }; });
-  r.get('/api/config', async () => ({ dev: DEV, liffId: process.env.LIFF_ID || null }));
+  r.get('/api/config', async () => ({ dev: DEV, liffId: process.env.LIFF_ID || null, requireOtp: REQUIRE_OTP }));
   liff(r); pos(r); admin(r); webhook(r); pub(r);
   if (DEV) dev(r);
 

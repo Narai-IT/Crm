@@ -2,6 +2,8 @@ import crypto from 'node:crypto';
 
 export const SECRET = process.env.APP_SECRET || 'dev-secret-change-me';
 export const DEV = process.env.DEV_MODE === '1';
+// 1 = ต้องยืนยันเบอร์ด้วย SMS OTP ตอนสมัคร · 0 (ค่าเริ่มต้น) = สมัครด้วยเบอร์ได้เลย เพราะ LINE ยืนยันตัวตนให้แล้ว
+export const REQUIRE_OTP = process.env.REQUIRE_PHONE_OTP === '1';
 
 export const sha256 = (s) => crypto.createHash('sha256').update(String(s)).digest('hex');
 export const hmac = (s) => crypto.createHmac('sha256', SECRET).update(String(s)).digest('base64url');

@@ -2,7 +2,7 @@
 // ทุกฟังก์ชันรับ db ที่อยู่ใน transaction (จาก tx()) เพื่อให้ทั้งชุดสำเร็จหรือยกเลิกพร้อมกัน
 import crypto from 'node:crypto';
 import { conflict, bad, notFound, HttpError } from '../http.js';
-import { calcPoints, couponDiscount, memberIdOf, randomCode, sha256, DEV, tierOf } from '../util.js';
+import { calcPoints, couponDiscount, memberIdOf, randomCode, sha256, DEV, REQUIRE_OTP, tierOf } from '../util.js';
 import { queueMessage } from './line.js';
 
 export const currentRule = (db, brandId) => db.one('SELECT * FROM earn_rules WHERE brand_id = $1 AND effective_to IS NULL', [brandId]);
@@ -154,12 +154,14 @@ export async function register(db, f) {
   if (await memberByLine(db, f.lineUserId)) throw conflict('already_member', 'บัญชี LINE นี้เป็นสมาชิกแล้ว');
   // OTP ถูกตรวจแล้วใน transaction แยก (เพื่อให้นับจำนวนครั้งที่ใส่ผิดได้จริง) ที่นี่ตรวจว่ามีการยืนยันล่าสุดของเบอร์ + LINE นี้
   const ok = await db.one("SELECT id FROM otp_requests WHERE phone = $1 AND line_user_id = $2 AND verified_at > now() - interval '15 minutes' ORDER BY id DESC LIMIT 1", [f.phone, f.lineUserId]);
-  if (!ok) throw bad('otp_required', 'ยืนยันเบอร์ด้วย OTP ก่อนสมัคร');
+  if (REQUIRE_OTP && !ok) throw bad('otp_required', 'ยืนยันเบอร์ด้วย OTP ก่อนสมัคร');
   const brand = await db.one('SELECT * FROM brands WHERE id = $1 AND is_active', [f.brandId]);
   if (!brand) throw bad('brand_invalid', 'ไม่พบแบรนด์');
 
   const existing = await db.one("SELECT * FROM members WHERE phone = $1 AND status = 'active' FOR UPDATE", [f.phone]);
   if (existing) {
+    // ไม่มี OTP = พิสูจน์ไม่ได้ว่าเป็นเจ้าของเบอร์ → ไม่ผูกให้เอง (กันคนใส่เบอร์ผู้อื่นแล้วได้แต้มไป)
+    if (!ok) throw conflict('phone_exists', 'เบอร์นี้เป็นสมาชิกอยู่แล้ว กรุณาติดต่อพนักงานที่ร้านเพื่อยืนยันและผูกบัญชีกับ LINE');
     // เบอร์นี้มีบัญชีอยู่แล้ว และเพิ่งยืนยัน OTP → ผูก LINE กับบัญชีเดิม (ไม่สร้างใหม่)
     await db.q('INSERT INTO member_line_identities (line_user_id, member_id, display_name) VALUES ($1,$2,$3) ON CONFLICT (line_user_id) DO UPDATE SET member_id = EXCLUDED.member_id, linked_at = now()', [f.lineUserId, existing.id, f.displayName || null]);
     await db.q('UPDATE members SET phone_verified_at = now(), updated_at = now() WHERE id = $1', [existing.id]);
@@ -175,8 +177,8 @@ export async function register(db, f) {
   if (!home) home = await db.one('SELECT id FROM branches WHERE brand_id = $1 AND is_active ORDER BY id LIMIT 1', [f.brandId]);
   const m = await db.one(
     `INSERT INTO members (id, full_name, phone, phone_verified_at, birth_date, home_branch_id, joined_brand_id, privacy_accepted_at, privacy_version)
-     VALUES ($1,$2,$3, now(), $4, $5, $6, now(), $7) RETURNING *`,
-    [id, f.name, f.phone, f.birthday || null, home ? home.id : null, f.brandId, f.privacyVersion || '2026-01']);
+     VALUES ($1,$2,$3, $8, $4, $5, $6, now(), $7) RETURNING *`,
+    [id, f.name, f.phone, f.birthday || null, home ? home.id : null, f.brandId, f.privacyVersion || '2026-01', ok ? new Date() : null]);
   await db.q('INSERT INTO member_line_identities (line_user_id, member_id, display_name) VALUES ($1,$2,$3)', [f.lineUserId, id, f.displayName || null]);
   await syncFollowLinks(db, id, f.lineUserId);
   await setConsent(db, id, f.brandId, !!f.marketing);

@@ -48,6 +48,18 @@ t('follow OA แล้วสมัครสมาชิกด้วย OTP ไ�
   assert.equal(me.data.wallets.narai.balance, 0);
 });
 
+t('สมัครด้วยเบอร์อย่างเดียว (ไม่มี OTP) ได้ · เบอร์ที่เป็นสมาชิกอยู่แล้วต้องให้พนักงานผูก', async () => {
+  const u2 = { 'x-dev-line-user': 'Utest000000000000000000000000002' };
+  const dup = await call('POST', '/api/liff/register', { brand: 'humlai', name: 'คนอื่น', phone: '0812345678', privacy: true }, u2);
+  assert.equal(dup.status, 409);
+  assert.equal((await call('GET', '/api/liff/me', undefined, u2)).data.member, null);
+  const reg = await call('POST', '/api/liff/register', { brand: 'humlai', name: 'ไม่ใช้ OTP', phone: '0877777777', privacy: true, branchId: 'HL01' }, u2);
+  assert.equal(reg.status, 200, JSON.stringify(reg.data));
+  assert.equal(reg.data.linked, false);
+  assert.equal(reg.data.welcomePoints, 50);
+  assert.equal((await call('GET', '/api/config')).data.requireOtp, false);
+});
+
 t('POS: สแกน QR → ปิดบิล → แต้มเข้า · ส่งบิลซ้ำไม่ได้แต้มซ้ำ', async () => {
   const qr = await call('GET', '/api/liff/qr', undefined, asUser);
   const who = await call('POST', '/api/pos/members/resolve', { qrToken: qr.data.token }, posHL01);

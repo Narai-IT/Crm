@@ -199,8 +199,10 @@
     return head('สมัครสมาชิก · ' + b.short_name) + '<main class="body" style="padding-bottom:24px">' +
       '<div class="hero"><b>สมัครวันนี้ รับ ' + fmt(b.welcome_points) + ' แต้มทันที</b><span style="font-size:13px">+ คูปองส่วนลดบิลแรก · สมัครครั้งเดียวใช้ได้ทุกแบรนด์ในเครือ</span></div>' +
       '<div class="field"><label for="r-name">ชื่อ - นามสกุล</label><input id="r-name" data-m="reg.name" value="' + esc(r.name) + '" autocomplete="name"></div>' +
-      '<div class="row2"><div class="field"><label for="r-phone">เบอร์โทรศัพท์</label><input id="r-phone" data-m="reg.phone" inputmode="tel" maxlength="10" value="' + esc(r.phone) + '" autocomplete="tel"></div><button class="btn' + (r.otpSent ? ' ghost' : '') + '" data-a="otp">' + (r.otpSent ? 'ส่งอีกครั้ง' : 'ขอ OTP') + '</button></div>' +
-      (r.otpSent ? '<span class="ok">ส่งรหัส OTP ทาง SMS แล้ว</span><div class="field"><label for="r-otp">รหัส OTP 6 หลัก</label><input id="r-otp" data-m="reg.otp" inputmode="numeric" maxlength="6" autocomplete="one-time-code" value="' + esc(r.otp) + '"></div>' : '<span class="muted" style="font-size:13px">เราจะส่งรหัสยืนยันทาง SMS · ถ้าเคยเป็นสมาชิกด้วยเบอร์นี้ ระบบจะใช้บัญชีเดิม</span>') +
+      (S.cfg && S.cfg.requireOtp
+        ? '<div class="row2"><div class="field"><label for="r-phone">เบอร์โทรศัพท์</label><input id="r-phone" data-m="reg.phone" inputmode="tel" maxlength="10" value="' + esc(r.phone) + '" autocomplete="tel"></div><button class="btn' + (r.otpSent ? ' ghost' : '') + '" data-a="otp">' + (r.otpSent ? 'ส่งอีกครั้ง' : 'ขอ OTP') + '</button></div>' +
+          (r.otpSent ? '<span class="ok">ส่งรหัส OTP ทาง SMS แล้ว</span><div class="field"><label for="r-otp">รหัส OTP 6 หลัก</label><input id="r-otp" data-m="reg.otp" inputmode="numeric" maxlength="6" autocomplete="one-time-code" value="' + esc(r.otp) + '"></div>' : '<span class="muted" style="font-size:13px">เราจะส่งรหัสยืนยันทาง SMS · ถ้าเคยเป็นสมาชิกด้วยเบอร์นี้ ระบบจะใช้บัญชีเดิม</span>')
+        : '<div class="field"><label for="r-phone">เบอร์โทรศัพท์</label><input id="r-phone" data-m="reg.phone" inputmode="tel" maxlength="10" value="' + esc(r.phone) + '" autocomplete="tel"></div>') +
       '<div class="row2"><div class="field"><label for="r-bd">วันเกิด (รับคูปองเดือนเกิด)</label><input id="r-bd" type="date" data-m="reg.birthday" value="' + esc(r.birthday) + '"></div></div>' +
       '<div class="field"><label for="r-br">สาขาประจำ</label><select id="r-br" data-m="reg.branchId">' + b.branches.map((x) => '<option value="' + x.id + '"' + (r.branchId === x.id ? ' selected' : '') + '>' + esc(x.name) + '</option>').join('') + '</select></div>' +
       '<label class="check"><input type="checkbox" data-m="reg.privacy"' + (r.privacy ? ' checked' : '') + '><span>ยอมรับเงื่อนไขสมาชิกและนโยบายความเป็นส่วนตัวของเครือ</span></label>' +
@@ -264,11 +266,11 @@
       const r = S.reg; r.err = '';
       if (!r.name.trim()) r.err = 'กรอกชื่อ - นามสกุล';
       else if (!/^0\d{8,9}$/.test(r.phone)) r.err = 'กรอกเบอร์โทร 10 หลักที่ขึ้นต้นด้วย 0';
-      else if (!r.otpSent || r.otp.length < 4) r.err = 'กดขอ OTP แล้วกรอกรหัสที่ได้รับ';
+      else if (S.cfg.requireOtp && (!r.otpSent || r.otp.length < 4)) r.err = 'กดขอ OTP แล้วกรอกรหัสที่ได้รับ';
       else if (!r.privacy) r.err = 'ต้องยอมรับเงื่อนไขสมาชิกและนโยบายความเป็นส่วนตัวก่อนสมัคร';
       if (r.err) return render();
       try {
-        const res = await api('POST', '/api/liff/register', { brand: S.brand, name: r.name.trim(), phone: r.phone, otp: r.otp, birthday: r.birthday || null, branchId: r.branchId, marketing: r.marketing, privacy: true });
+        const res = await api('POST', '/api/liff/register', { brand: S.brand, name: r.name.trim(), phone: r.phone, otp: S.cfg.requireOtp ? r.otp : undefined, birthday: r.birthday || null, branchId: r.branchId, marketing: r.marketing, privacy: true });
         toast(res.linked ? 'พบบัญชีเดิมของคุณ ผูกกับ LINE แล้ว' : 'สมัครสำเร็จ รับ ' + fmt(res.welcomePoints) + ' แต้ม');
         S.tab = 'home'; await refresh();
       } catch (e) { r.err = e.message; render(); }

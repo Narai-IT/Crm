@@ -76,7 +76,7 @@ server/
     services/line.js           ตรวจลายเซ็น webhook, ตอบ Rich Menu, สร้าง Flex, ส่งผ่าน outbox
     routes/                    liff · pos · admin · webhook · dev
     worker.js                  ส่งข้อความหลัง commit, แต้ม/คูปองหมดอายุ
-  test/api.test.js             ทดสอบ flow หลัก 9 กรณี
+  test/api.test.js             ทดสอบ flow หลัก 10 กรณี
 ```
 
 ## API
@@ -104,6 +104,6 @@ curl -X POST http://localhost:3000/api/pos/transactions \
 2. สุ่ม `APP_SECRET` ใหม่ · ตั้งรหัสผ่านพนักงานทุกคนด้วย `scripts/manage.js` · ออก API key POS ใหม่ทุกสาขา และลบ key ตัวอย่าง
 3. ใส่ `LINE_LOGIN_CHANNEL_ID`, `LIFF_ID` และ secret/token ของแต่ละ OA (OA ทั้งหมด + LINE Login ต้องอยู่ Provider เดียวกัน)
 4. ตั้ง Webhook URL ของแต่ละ OA เป็น `https://<โดเมน>/webhooks/line/<brand>` (ต้องเป็น HTTPS)
-5. ต่อผู้ให้บริการ SMS สำหรับ OTP (ตอนนี้งาน `sms_otp` เข้าคิวไว้แต่ยังไม่ส่ง)
+5. สมัครสมาชิก: ค่าเริ่มต้น `REQUIRE_PHONE_OTP=0` ลูกค้ากรอกเบอร์อย่างเดียว (LINE ยืนยันตัวตนให้แล้ว) · เบอร์ที่เป็นสมาชิกอยู่แล้วระบบจะไม่ผูกให้เอง ต้องให้พนักงานผูก · ถ้าต้องการยืนยันเบอร์ด้วย SMS ให้ต่อผู้ให้บริการ SMS (งาน `sms_otp` เข้าคิวไว้แต่ยังไม่ส่ง) แล้วตั้ง `REQUIRE_PHONE_OTP=1`
 6. ใช้ PostgreSQL แบบ managed (เช่น Cloud SQL / RDS / Supabase ใน region กรุงเทพหรือสิงคโปร์) เปิด backup อัตโนมัติ
 7. หน้า LIFF จริงอยู่ที่ `/liff/` (โฟลเดอร์ `liff/`) ใช้ `liff.getIDToken()` เป็น Bearer token · ขั้นตอนตั้งค่าทั้งหมดอยู่ใน [docs/LINE-SETUP.md](../docs/LINE-SETUP.md)

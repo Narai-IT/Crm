@@ -104,7 +104,7 @@ Cloudflare ใช้กฎที่ตรง path มากที่สุด �
 ## 7. ก่อนเปิดให้ลูกค้าจริง
 
 - ตั้ง `DEV_MODE=0` ใน `.env` แล้ว `nssm restart GroupCRM` (ปิดหน้าเดโม/ปุ่มล้างข้อมูล/OTP บนจอ)
-- ต่อผู้ให้บริการ SMS สำหรับ OTP (ตอนนี้ระบบเข้าคิวไว้แต่ยังไม่ส่ง)
+- (ถ้าต้องการ) ยืนยันเบอร์ด้วย SMS OTP: ต่อผู้ให้บริการ SMS แล้วตั้ง `REQUIRE_PHONE_OTP=1` · ค่าเริ่มต้นสมัครด้วยเบอร์อย่างเดียว
 - ล้างข้อมูลตัวอย่าง: `npm run db:reset` ก่อนตั้ง `DEV_MODE=0` แล้วรัน `node --env-file=.env scripts/seed.js --no-demo`
 - เปลี่ยนรหัสผ่านพนักงาน และออก API key POS ใหม่ (`scripts/manage.js`)
 - เปลี่ยน token ของ Cloudflare Tunnel (เคยแชร์ในแชท)
