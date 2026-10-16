@@ -2,7 +2,7 @@
 import { q, one, tx } from '../db.js';
 import { bad, notFound, HttpError } from '../http.js';
 import { posTerminal } from '../auth.js';
-import { readQrToken, maskPhone } from '../util.js';
+import { readQrToken, maskPhone, signToken, verifyToken } from '../util.js';
 import * as core from '../services/core.js';
 import { COUPON_SQL, couponView } from './liff.js';
 
@@ -36,10 +36,54 @@ export default function (r) {
     if (!body.posBillId) throw bad('pos_bill_id_required', 'ต้องมีเลขบิล');
     const res = await tx((db) => core.recordSale(db, { branchId: t.branchId, terminalId: t.terminalId, staffId: body.staffId || t.staffId, posBillId: String(body.posBillId),
       memberId: body.memberId || null, items: body.items, couponIds: body.couponIds || [], channel: ['pos', 'kiosk'].includes(body.channel) ? body.channel : (t.kind === 'kiosk' ? 'kiosk' : 'pos'),
-      storeDiscount: body.storeDiscount, paidTotal: body.paidTotal }));
+      storeDiscount: body.storeDiscount, paidTotal: body.paidTotal, couponRef: body.couponRef ? String(body.couponRef) : null,
+      couponDiscount: body.couponIds && body.couponIds.length && body.couponDiscount !== undefined ? body.couponDiscount : undefined }));
     if (res.duplicate) return { duplicate: true, posBillId: res.txn.pos_bill_id, memberId: res.txn.member_id, points: res.txn.points_earned, total: res.txn.total };
     return { duplicate: false, posBillId: res.txn.pos_bill_id, memberId: res.txn.member_id, subtotal: res.txn.subtotal, discount: res.discount, total: res.txn.total, points: res.points, balance: res.balance, coupons: res.coupons.map(String) };
   }, (b, out) => out?.duplicate ? 'บิลนี้บันทึกแล้ว ไม่ให้แต้มซ้ำ' : '+' + (out?.points ?? 0) + ' แต้ม');
+
+  // ── คูปอง/แลกแต้มที่หน้าร้าน ──
+  // หน้าลูกค้าสั่งเอง (requireVerify) ต้องมี verifyToken จากรหัสที่ส่งเข้า LINE ของสมาชิก · หน้าขายของพนักงานไม่ต้อง (พนักงานสแกนบัตร/ถามลูกค้าเอง)
+  const memberOf = (body) => {
+    const id = String(body.memberId || '');
+    if (!/^MB-\d{7}$/.test(id)) throw bad('member_required', 'ไม่พบเลขสมาชิก');
+    if (body.verifyToken || body.requireVerify) {
+      const v = verifyToken(String(body.verifyToken || ''));
+      if (!v || v.vm !== id) throw new HttpError(401, 'verify_required', 'ยืนยันตัวตนด้วยรหัสที่ส่งไปใน LINE ก่อน');
+    }
+    return id;
+  };
+  r.post('/api/pos/members/wallet', async (req, body) => {
+    const t = await posTerminal(req);
+    return tx((db) => core.posWallet(db, { memberId: memberOf(body), brandId: t.brandId, subtotal: body.subtotal, ref: body.ref ? String(body.ref) : null }));
+  });
+  r.post('/api/pos/coupons/reserve', async (req, body) => {
+    const t = await posTerminal(req);
+    const coupon = await tx((db) => core.reserveCoupon(db, { memberId: memberOf(body), brandId: t.brandId, couponId: body.couponId, ref: String(body.ref || ''), subtotal: body.subtotal, minutes: Number(body.minutes) || 30 }));
+    return { coupon };
+  }, (b, out) => 'จองคูปอง ' + (out?.coupon?.code || ''));
+  r.post('/api/pos/coupons/release', async (req, body) => {
+    await posTerminal(req);
+    return tx((db) => core.releaseCoupon(db, { couponId: body.couponId, ref: body.ref }));
+  });
+  r.post('/api/pos/redeem', async (req, body) => {
+    const t = await posTerminal(req);
+    if (!body.ref) throw bad('ref_required', 'ต้องมีรหัสบิลที่กำลังเปิด');
+    return tx((db) => core.redeemAtPos(db, { memberId: memberOf(body), brandId: t.brandId, rewardId: body.rewardId, ref: String(body.ref), subtotal: body.subtotal, minutes: Number(body.minutes) || 30 }));
+  }, (b, out) => 'แลกแต้ม คงเหลือ ' + (out?.balance ?? ''));
+  r.post('/api/pos/members/verify/send', async (req, body) => {
+    const t = await posTerminal(req);
+    const id = String(body.memberId || '');
+    if (!/^MB-\d{7}$/.test(id)) throw bad('member_required', 'ไม่พบเลขสมาชิก');
+    return tx((db) => core.sendMemberCode(db, { memberId: id, brandId: t.brandId }));
+  });
+  r.post('/api/pos/members/verify/check', async (req, body) => {
+    await posTerminal(req);
+    const id = String(body.memberId || '');
+    const ok = await tx((db) => core.checkMemberCode(db, { memberId: id, code: body.code }));
+    if (!ok) throw bad('code_invalid', 'รหัสไม่ถูกต้องหรือหมดอายุ ขอรหัสใหม่ได้');
+    return { verifyToken: signToken({ vm: id }, 3600) };
+  });
 
   r.post('/api/pos/refunds', async (req, body) => {
     const t = await posTerminal(req);
