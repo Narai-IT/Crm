@@ -34,6 +34,8 @@ export async function migrate({ reset = false, quiet = false } = {}) {
       }
     }
     if (!quiet) console.log('ฐานข้อมูลเป็นเวอร์ชันล่าสุดแล้ว');
+    const { ensureDefaultAdmin } = await import('../src/auth.js');
+    if (await ensureDefaultAdmin() && !quiet) console.log('สร้างบัญชีหลังบ้านเริ่มต้น admin / admin แล้ว (ต้องเปลี่ยนรหัสผ่านตอนเข้าครั้งแรก)');
   } finally {
     c.release();
   }

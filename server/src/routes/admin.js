@@ -1,7 +1,7 @@
 // API หลังบ้าน · ตรวจตำแหน่ง + ขอบเขตแบรนด์/สาขาทุกครั้งฝั่ง server
 import { q, one, tx } from '../db.js';
 import { bad, notFound, HttpError } from '../http.js';
-import { staffUser, loadStaff, requirePage, requireBrand, scopeBrands, ROLE_PAGES, ROLE_NAMES, ROLE_SCOPE } from '../auth.js';
+import { staffUser, loadStaff, requirePage, requireBrand, scopeBrands, ROLE_PAGES, ROLE_NAMES, ROLE_SCOPE, ensureDefaultAdmin } from '../auth.js';
 import { checkPassword, hashPassword, signToken, maskPhone } from '../util.js';
 import * as core from '../services/core.js';
 import { queueMessage } from '../services/line.js';
@@ -71,6 +71,9 @@ function templateFields(b) {
   const code = kind === 'code' ? String(b.code || '').trim().toUpperCase() : null;
   if (kind === 'code' && !/^[A-Z0-9]{4,20}$/.test(code)) throw bad('code_invalid', 'โค้ดต้องเป็นตัวอังกฤษหรือตัวเลข 4-20 ตัว');
   const tier = ['SILVER', 'GOLD', 'PLATINUM'].includes(b.tier) ? b.tier : 'all';
+  // สาขาที่สมัคร (เฉพาะคูปองต้อนรับ) · ว่าง = ทุกสาขา
+  const branchIds = kind === 'welcome' && Array.isArray(b.branchIds) ? [...new Set(b.branchIds.map(String))] : null;
+  if (branchIds && !branchIds.length) throw bad('branch_required', 'เลือกสาขาอย่างน้อย 1 สาขา หรือเลือก "ทุกสาขา"');
   // ป้ายบนคูปอง + เงื่อนไขย่อ (สร้างจากการตั้งค่า ลูกค้าเห็นตรงกับที่ระบบตรวจจริง)
   const big = style === 'free' ? 'ฟรี' : style === 'pct' ? '-' + value + '%' : '-' + value;
   const small = style === 'free' ? KIND_NAMES[kind] : style === 'pct' ? 'ส่วนลด' : 'บาท';
@@ -78,7 +81,13 @@ function templateFields(b) {
     useDays === 127 ? '' : 'ใช้ได้วัน ' + DAY_SHORT.filter((_, i) => useDays & (1 << i)).join(' '), '1 ใบใช้ได้ 1 ครั้ง'].filter(Boolean).join(' · ');
   return { kind, title, description: String(b.description || '').trim().slice(0, 1000), imageId: b.imageId ? parseInt(b.imageId, 10) : null, type: style === 'pct' ? 'pct' : 'baht',
     value, min, maxDiscount, big, small, cond, validity, validFrom, validTo, days, issueFrom, issueTo, tier, followersOnly: !!b.followersOnly, useDays,
-    maxIssue: optInt(b.maxIssue) || null, code, active: b.active !== false };
+    maxIssue: optInt(b.maxIssue) || null, code, active: b.active !== false, branchIds };
+}
+async function checkBranches(brandId, ids) {
+  if (!ids) return null;
+  const ok = await q('SELECT id FROM branches WHERE id = ANY($1) AND brand_id = $2', [ids, brandId]);
+  if (ok.length !== ids.length) throw bad('branch_invalid', 'สาขาที่เลือกไม่ใช่ของแบรนด์นี้');
+  return ids;
 }
 async function saveCode(db, t, f, oldCode) {
   if (oldCode && oldCode !== f.code) await db.q('DELETE FROM promo_codes WHERE code = $1 AND used_count = 0', [oldCode]);
@@ -130,7 +139,11 @@ export function audienceSql(segment) {
 
 export default function (r) {
   r.post('/api/admin/login', async (_req, body) => {
-    const s = await one('SELECT id, password_hash FROM staff WHERE (id = $1 OR email = $1) AND is_active', [String(body.username || '')]);
+    const user = String(body.username || '').trim();
+    // บัญชีเริ่มต้น admin: ถ้ายังไม่มี (เช่น server เปิดก่อนรัน migrate) สร้างให้ตอนนี้
+    if (user.toLowerCase() === 'admin') await ensureDefaultAdmin();
+    // ชื่อผู้ใช้/อีเมลไม่สนตัวพิมพ์เล็ก-ใหญ่ (มือถือมักขึ้นต้นตัวใหญ่ให้เอง)
+    const s = await one('SELECT id, password_hash FROM staff WHERE (lower(id) = lower($1) OR lower(email) = lower($1)) AND is_active ORDER BY (id = $1) DESC LIMIT 1', [user]);
     if (!s || !checkPassword(String(body.password || ''), s.password_hash)) throw new HttpError(401, 'login_failed', 'ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง');
     const st = await loadStaff(s.id);
     if (!st.pages.length) throw new HttpError(403, 'forbidden', 'ตำแหน่งนี้ไม่มีสิทธิ์เข้าหลังบ้าน');
@@ -305,10 +318,10 @@ export default function (r) {
     const f = templateFields(b);
     return tx(async (db) => {
       const t = await db.one(`INSERT INTO coupon_templates (brand_id, kind, title, description, image_id, badge_big, badge_small, condition_text, discount_type, discount_value, max_discount, min_spend,
-          validity, valid_from, valid_to, valid_days, issue_from, issue_to, audience_tier, followers_only, use_days, max_issue, is_active, created_by)
-        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24) RETURNING *`,
+          validity, valid_from, valid_to, valid_days, issue_from, issue_to, audience_tier, followers_only, use_days, max_issue, is_active, created_by, branch_ids)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25) RETURNING *`,
         [b.brand, f.kind, f.title, f.description, f.imageId, f.big, f.small, f.cond, f.type, f.value, f.maxDiscount, f.min, f.validity, f.validFrom, f.validTo, f.days,
-          f.issueFrom, f.issueTo, f.tier, f.followersOnly, f.useDays, f.maxIssue, f.active, s.id]);
+          f.issueFrom, f.issueTo, f.tier, f.followersOnly, f.useDays, f.maxIssue, f.active, s.id, await checkBranches(b.brand, f.branchIds)]);
       await saveCode(db, t, f, null);
       await core.audit(db, actor(s), 'create_coupon', { type: 'coupon', id: String(t.id) }, b.brand + ' · ' + KIND_NAMES[f.kind] + ' · ' + f.title);
       return db.one(TPL_SQL + ' WHERE t.id = $1', [t.id]);
@@ -335,9 +348,9 @@ export default function (r) {
       else {
         t = await db.one(`UPDATE coupon_templates SET kind = $2, title = $3, description = $4, image_id = $5, badge_big = $6, badge_small = $7, condition_text = $8, discount_type = $9, discount_value = $10,
             max_discount = $11, min_spend = $12, validity = $13, valid_from = $14, valid_to = $15, valid_days = $16, issue_from = $17, issue_to = $18, audience_tier = $19, followers_only = $20,
-            use_days = $21, max_issue = $22, is_active = $23, updated_at = now() WHERE id = $1 RETURNING *`,
+            use_days = $21, max_issue = $22, is_active = $23, branch_ids = $24, updated_at = now() WHERE id = $1 RETURNING *`,
           [old.id, f.kind, f.title, f.description, f.imageId, f.big, f.small, f.cond, f.type, f.value, f.maxDiscount, f.min, f.validity, f.validFrom, f.validTo, f.days,
-            f.issueFrom, f.issueTo, f.tier, f.followersOnly, f.useDays, f.maxIssue, f.active]);
+            f.issueFrom, f.issueTo, f.tier, f.followersOnly, f.useDays, f.maxIssue, f.active, await checkBranches(old.brand_id, f.branchIds)]);
         await saveCode(db, t, f, old.code);
       }
       // โค้ดหมดเขตตามช่วงแจกของคูปอง

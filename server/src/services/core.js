@@ -240,7 +240,9 @@ export async function register(db, f) {
   }
   // คูปองต้อนรับ: ทุกใบประเภท "ต้อนรับ" ของแบรนด์ที่ยังอยู่ในช่วงแจก
   let coupon = null; const titles = [];
-  for (const t of await db.q(`SELECT t.* FROM coupon_templates t WHERE t.brand_id = $1 AND t.kind = 'welcome' AND ${OPEN_TPL} ORDER BY t.id`, [f.brandId])) {
+  // ตั้งให้เฉพาะบางสาขาได้: ได้เมื่อสาขาประจำที่เลือกตอนสมัครอยู่ในรายการ
+  for (const t of await db.q(`SELECT t.* FROM coupon_templates t WHERE t.brand_id = $1 AND t.kind = 'welcome' AND ${OPEN_TPL}
+      AND (t.branch_ids IS NULL OR $2::text = ANY(t.branch_ids)) ORDER BY t.id`, [f.brandId, home ? home.id : null])) {
     try {
       const c = await issueCoupon(db, { memberId: id, templateId: t.id, source: 'welcome', sourceRef: f.brandId + ':' + t.id });
       coupon = coupon || c; titles.push(t.title);

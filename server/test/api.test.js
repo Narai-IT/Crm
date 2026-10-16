@@ -186,9 +186,8 @@ t('หลังบ้าน: แก้ของรางวัล (คูปอ�
 
 t('ผู้ใช้หลังบ้าน: admin/admin ต้องเปลี่ยนรหัสก่อน · เพิ่มผู้ใช้ตามแบรนด์ · ปิดใช้งาน · ต้องเหลือผู้ดูแลอย่างน้อย 1 คน', async () => {
   const { ensureDefaultAdmin } = await import('../src/auth.js');
-  assert.equal(await ensureDefaultAdmin(), true);
-  assert.equal(await ensureDefaultAdmin(), false);
-  const login = await call('POST', '/api/admin/login', { username: 'admin', password: 'admin' });
+  assert.equal(await ensureDefaultAdmin(), false);   // migrate สร้างไว้แล้ว
+  const login = await call('POST', '/api/admin/login', { username: 'Admin ', password: 'admin' });   // มือถือพิมพ์ตัวใหญ่ให้เอง
   assert.equal(login.status, 200);
   assert.equal(login.data.staff.mustChange, true);
   const adm = { authorization: 'Bearer ' + login.data.token };
@@ -287,4 +286,23 @@ t('จัดการคูปอง: แจกอัตโนมัติตา
   const list = (await call('GET', '/api/admin/coupon-templates?brand=humlai', undefined, adm)).data;
   assert.equal(list.find((x) => x.id === g.data.id).used, 1);
   assert.ok(list.some((x) => x.kind === 'welcome'));
+});
+
+t('คูปองต้อนรับแยกตามสาขาที่สมัคร', async () => {
+  const login = await call('POST', '/api/admin/login', { username: 'S003', password: 'demo1234' });
+  const adm = { authorization: 'Bearer ' + login.data.token };
+  const base = { brand: 'humlai', kind: 'welcome', validity: 'days', days: 30, useDays: 127, type: 'baht' };
+  assert.equal((await call('POST', '/api/admin/coupon-templates', { ...base, title: 'x', value: 1, branchIds: [] }, adm)).data.error, 'branch_required');
+  assert.equal((await call('POST', '/api/admin/coupon-templates', { ...base, title: 'x', value: 1, branchIds: ['NR01'] }, adm)).data.error, 'branch_invalid');
+  assert.equal((await call('POST', '/api/admin/coupon-templates', { ...base, title: 'ต้อนรับสาขา 2', value: 30, branchIds: ['HL02'] }, adm)).status, 200);
+  const reg = async (n, branchId) => {
+    const u = { 'x-dev-line-user': 'Uwelcome' + n };
+    const r = await call('POST', '/api/liff/register', { brand: 'humlai', name: 'สาขา ' + branchId, phone: '08000000' + n, privacy: true, branchId }, u);
+    assert.equal(r.status, 200, JSON.stringify(r.data));
+    return (await call('GET', '/api/liff/coupons?brand=humlai', undefined, u)).data.map((c) => c.title);
+  };
+  const at2 = await reg('11', 'HL02'); const at1 = await reg('12', 'HL01');
+  assert.ok(at2.includes('ต้อนรับสาขา 2'));
+  assert.ok(!at1.includes('ต้อนรับสาขา 2'));
+  assert.ok(at1.includes('ส่วนลด 10% บิลแรก') && at2.includes('ส่วนลด 10% บิลแรก'));   // ใบเดิมตั้งเป็นทุกสาขา
 });

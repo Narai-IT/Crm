@@ -83,7 +83,7 @@
   }
   function loginView(msg) {
     $app.innerHTML = '<div class="center"><form class="login" data-f="login"><h1>หลังบ้าน CRM</h1><span class="muted">เข้าสู่ระบบด้วยรหัสพนักงาน</span>' +
-      '<div class="field"><label for="u">รหัสพนักงานหรืออีเมล</label><input id="u" name="username" autocomplete="username" required></div>' +
+      '<div class="field"><label for="u">รหัสพนักงานหรืออีเมล</label><input id="u" name="username" autocomplete="username" autocapitalize="none" autocorrect="off" spellcheck="false" required></div>' +
       '<div class="field"><label for="p">รหัสผ่าน</label><input id="p" name="password" type="password" autocomplete="current-password" required></div>' +
       (msg ? '<div class="err" role="alert">' + esc(msg) + '</div>' : '') + '<button class="btn">เข้าสู่ระบบ</button></form></div>';
     const u = document.getElementById('u'); if (u) u.focus();
@@ -208,7 +208,7 @@
           const st = couponState(t);
           return '<tr class="' + (st[1] === 'pill' ? '' : 'off') + '"><td>' + (t.image_id ? '<img class="thumb" alt="" src="/api/public/coupon-images/' + t.image_id + '">' : '<span class="thumb badge">' + esc(t.badge_big) + '</span>') + '</td>' +
             '<td><b>' + esc(t.title) + '</b>' + (t.code ? '<br><small>โค้ด <b>' + esc(t.code) + '</b></small>' : '') + (t.brand_id ? '' : '<br><small class="muted">ทุกแบรนด์</small>') + '</td>' +
-            '<td>' + esc(KIND_NAME[t.kind] || t.kind) + (t.audience_tier !== 'all' ? '<br><small class="muted">' + TIER_NAME[t.audience_tier] + '</small>' : '') + '</td>' +
+            '<td>' + esc(KIND_NAME[t.kind] || t.kind) + (t.branch_ids ? '<br><small class="muted">สมัครที่ ' + esc(t.branch_ids.map(branchLabel).join(', ')) + '</small>' : '') + (t.audience_tier !== 'all' ? '<br><small class="muted">' + TIER_NAME[t.audience_tier] + '</small>' : '') + '</td>' +
             '<td>' + esc(valueText(t)) + (Number(t.min_spend) ? '<br><small class="muted">ขั้นต่ำ ' + fmt(t.min_spend) + ' บาท</small>' : '') + '</td>' +
             '<td><small>' + (t.validity === 'dates' ? date(t.valid_from) + ' - ' + date(t.valid_to) : t.valid_days + ' วันหลังได้รับ') + '<br>' + daysText(t.use_days) + '</small></td>' +
             '<td class="r num">' + fmt(t.issued) + (t.max_issue ? ' / ' + fmt(t.max_issue) : '') + '<br><small class="muted">ใช้แล้ว ' + fmt(t.used) + '</small></td>' +
@@ -219,7 +219,7 @@
   function couponForm(id) {
     const t = id ? S.data.coupons.find((x) => String(x.id) === String(id)) : null;
     const x = t || { kind: 'general', title: '', description: '', discount_type: 'baht', badge_big: '', discount_value: '', min_spend: 0, max_discount: null, validity: 'days', valid_days: 30, valid_from: null, valid_to: null,
-      issue_from: null, issue_to: null, audience_tier: 'all', followers_only: false, use_days: 127, max_issue: null, is_active: true, code: '', issued: 0 };
+      issue_from: null, issue_to: null, branch_ids: null, audience_tier: 'all', followers_only: false, use_days: 127, max_issue: null, is_active: true, code: '', issued: 0 };
     const style = t ? couponStyle(t) : 'baht'; const locked = t && t.issued > 0;
     const lockAttr = locked ? ' disabled' : '';
     const radio = (name, val, cur, label, extra) => '<label class="check"><input type="radio" name="' + name + '" value="' + val + '"' + (String(cur) === String(val) ? ' checked' : '') + (extra || '') + '>' + label + '</label>';
@@ -238,6 +238,9 @@
         '<div class="field"><label for="c-min">ยอดซื้อขั้นต่ำ (บาท)</label><input id="c-min" name="min" type="number" min="0" value="' + esc(Number(x.min_spend) || 0) + '"' + lockAttr + '></div>' +
         '<div class="field" data-show="code"><label for="c-code">โค้ดที่ลูกค้ากรอก</label><input id="c-code" name="code" maxlength="20" autocapitalize="characters" placeholder="เช่น HUMLAI50" value="' + esc(x.code || '') + '"' + lockAttr + '></div>' +
       '</div>' +
+      '<fieldset class="field" data-show="welcome"><legend>ให้กับสมาชิกที่สมัครที่สาขา</legend><div class="row-in">' + radio('wscope', 'all', x.branch_ids ? 'some' : 'all', 'ทุกสาขา') + radio('wscope', 'some', x.branch_ids ? 'some' : 'all', 'เฉพาะสาขาที่เลือก') + '</div>' +
+        '<div class="row-in" data-show="wbr">' + brand().branches.map((br) => '<label class="check"><input type="checkbox" name="wb" value="' + esc(br.id) + '"' + ((x.branch_ids || []).includes(br.id) ? ' checked' : '') + '>' + esc(br.name) + '</label>').join('') + '</div>' +
+        '<span class="hint">ใช้สาขาประจำที่ลูกค้าเลือกในหน้าสมัคร · ตั้งคูปองต้อนรับหลายใบให้แต่ละสาขาต่างกันได้</span></fieldset>' +
       '<fieldset class="field"><legend>วันที่ใช้ได้</legend><div class="row-in">' + radio('validity', 'dates', x.validity, 'ตามวันที่') + radio('validity', 'days', x.validity, 'ตามระยะเวลาหลังได้รับ') + '</div>' +
         '<div class="row-in" data-show="dates"><input type="date" name="validFrom" aria-label="วันเริ่มใช้" value="' + isoDay(x.valid_from) + '"> ถึง <input type="date" name="validTo" aria-label="วันสุดท้ายที่ใช้" value="' + isoDay(x.valid_to) + '"></div>' +
         '<div class="row-in" data-show="days"><input type="number" name="days" min="1" max="365" style="width:90px" aria-label="จำนวนวัน" value="' + esc(x.valid_days || 30) + '"> วัน นับจากวันที่ลูกค้าได้รับคูปอง</div></fieldset>' +
@@ -260,11 +263,12 @@
     let mask = 0; for (let i = 0; i < 7; i++) if (v('d' + i)) mask |= 1 << i;
     return { brand: S.brand, kind: v('kind'), title: v('title'), description: v('description'), imageId: S.edit.imageId || null, type: v('type'), value: v('value'), maxDiscount: v('maxDiscount'),
       min: v('min'), code: v('code'), validity: v('validity'), validFrom: v('validFrom'), validTo: v('validTo'), days: v('days'), issueFrom: v('issueFrom'), issueTo: v('issueTo'),
-      tier: v('tier'), followersOnly: v('followersOnly') === '1', useDays: mask, maxIssue: v('limit') === '1' ? v('maxIssue') : '', active: v('active') };
+      tier: v('tier'), followersOnly: v('followersOnly') === '1', useDays: mask,
+      branchIds: v('kind') === 'welcome' && v('wscope') === 'some' ? [...el.querySelectorAll('input[name="wb"]:checked')].map((x) => x.value) : null, maxIssue: v('limit') === '1' ? v('maxIssue') : '', active: v('active') };
   }
   function syncCoupon(el) {
     const b = couponBody(el);
-    const show = { pct: b.type === 'pct', code: b.kind === 'code', dates: b.validity === 'dates', days: b.validity !== 'dates', limit: el.elements.limit && el.elements.limit.value === '1' };
+    const show = { pct: b.type === 'pct', code: b.kind === 'code', welcome: b.kind === 'welcome', wbr: b.kind === 'welcome' && el.elements.wscope && el.elements.wscope.value === 'some', dates: b.validity === 'dates', days: b.validity !== 'dates', limit: el.elements.limit && el.elements.limit.value === '1' };
     el.querySelectorAll('[data-show]').forEach((x) => { x.hidden = !show[x.dataset.show]; });
     const k = KINDS.find((x) => x[0] === b.kind); document.getElementById('kind-hint').textContent = k ? k[2] : '';
     document.getElementById('c-val-l').textContent = b.type === 'free' ? 'ราคาของที่แจก (บาท)' : b.type === 'pct' ? 'ลดกี่ %' : 'ลดกี่บาท';
@@ -275,6 +279,7 @@
       (S.edit.imageUrl ? '<img class="prev-img" alt="" src="' + esc(S.edit.imageUrl) + '">' : '<div class="prev-img ph"><b>' + esc(big) + '</b></div>') +
       '<div class="prev-body"><b>' + esc(b.title || 'ชื่อคูปอง') + '</b>' + (b.description ? '<p>' + esc(b.description) + '</p>' : '') + '<span class="prev-btn">ใช้คูปอง</span></div>' +
       '<div class="prev-sec"><b>การใช้งาน</b>' + (b.validity === 'dates' ? row('วันที่เริ่มต้น', b.validFrom ? date(b.validFrom + 'T12:00:00+07:00') : '-') : '') + row('วันหมดอายุ', exp) + row('ใช้ได้', '1 ครั้ง') + (b.kind === 'code' ? row('โค้ด', (b.code || '-').toUpperCase()) : '') + '</div>' +
+      (b.kind === 'welcome' ? '<div class="prev-sec"><b>ได้เมื่อ</b>' + row('สมัครที่สาขา', b.branchIds ? (b.branchIds.length ? b.branchIds.map(branchLabel).join(', ') : 'ยังไม่ได้เลือก') : 'ทุกสาขา') + '</div>' : '') +
       '<div class="prev-sec"><b>เงื่อนไข</b>' + row('ขั้นต่ำ', Number(b.min) ? fmt(b.min) + ' บาท' : 'ไม่มี') + (b.type === 'pct' && Number(b.maxDiscount) ? row('ลดสูงสุด', fmt(b.maxDiscount) + ' บาท') : '') + row('ใช้ได้เมื่อ', daysText(b.useDays || 0) || '-') + row('จำกัด', b.maxIssue ? fmt(b.maxIssue) + ' ใบ' : 'ไม่จำกัด') + '</div>';
   }
   function rerenderCoupon() {
