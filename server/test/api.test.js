@@ -366,3 +366,57 @@ t('POS ส่งส่วนลดร้าน + ยอดจ่ายจริ�
   assert.equal(anon.status, 200);
   assert.equal(anon.data.points, 0);
 });
+
+t('หน้าร้าน: ดูคูปอง/รางวัล · จองคูปองกันใช้ซ้ำสองบิล · แลกแต้มเป็นคูปองแล้วใช้ทันที · หน้าลูกค้าต้องยืนยันรหัส LINE', async () => {
+  const u = { 'x-dev-line-user': 'Upospay01' };
+  await call('POST', '/api/liff/register', { brand: 'humlai', name: 'คูปองหน้าร้าน', phone: '0833330000', privacy: true }, u);
+  const mid = (await call('GET', '/api/liff/me', undefined, u)).data.member.id;
+  await mods.db.q("UPDATE member_line_identities SET line_user_id = 'Upospay01' WHERE member_id = $1", [mid]);
+  // ให้แต้มพอแลก
+  await call('POST', '/api/pos/transactions', { posBillId: 'CPN-0', memberId: mid, items: [{ id: 'a', name: 'ชุดใหญ่', price: 5000, qty: 1 }] }, posHL01);
+
+  const w = await call('POST', '/api/pos/members/wallet', { memberId: mid, subtotal: 300, ref: 'R1' }, posHL01);
+  assert.equal(w.status, 200, JSON.stringify(w.data));
+  const welcome = w.data.coupons.find((c) => c.usable);
+  assert.ok(welcome, 'ควรมีคูปองต้อนรับที่ใช้ได้');
+  assert.ok(w.data.rewards.some((r) => r.affordable));
+
+  // จองกับบิล R1 แล้ว บิล R2 จองซ้ำไม่ได้ · บิลที่ไม่ได้จองใช้ใบนี้ไม่ได้
+  const res1 = await call('POST', '/api/pos/coupons/reserve', { memberId: mid, couponId: welcome.id, ref: 'R1', subtotal: 300 }, posHL01);
+  assert.equal(res1.status, 200, JSON.stringify(res1.data));
+  assert.equal(res1.data.coupon.discount, welcome.discount);
+  assert.equal((await call('POST', '/api/pos/coupons/reserve', { memberId: mid, couponId: welcome.id, ref: 'R2', subtotal: 300 }, posHL01)).data.error, 'coupon_reserved');
+  assert.equal((await call('POST', '/api/pos/transactions', { posBillId: 'CPN-X', memberId: mid, couponIds: [welcome.id], couponRef: 'R2', items: [{ id: 'a', name: 'x', price: 300, qty: 1 }] }, posHL01)).data.error, 'coupon_reserved');
+  // ปิดบิล R1 ด้วยคูปอง
+  const sale = await call('POST', '/api/pos/transactions', { posBillId: 'CPN-1', memberId: mid, couponIds: [welcome.id], couponRef: 'R1', couponDiscount: res1.data.coupon.discount, paidTotal: 300 - res1.data.coupon.discount, items: [{ id: 'a', name: 'x', price: 300, qty: 1 }] }, posHL01);
+  assert.equal(sale.status, 200, JSON.stringify(sale.data));
+  assert.equal(Number(sale.data.discount), res1.data.coupon.discount);
+  assert.deepEqual(sale.data.coupons, [welcome.id]);
+
+  // แลกแต้มที่หน้าร้าน → ได้คูปองจองกับบิล R3 · กดซ้ำไม่ตัดแต้มซ้ำ
+  const rw = w.data.rewards.find((r) => r.affordable);
+  const before = (await call('GET', '/api/liff/me', undefined, u)).data.wallets.humlai.balance;
+  const red = await call('POST', '/api/pos/redeem', { memberId: mid, rewardId: rw.id, ref: 'R3', subtotal: 500 }, posHL01);
+  assert.equal(red.status, 200, JSON.stringify(red.data));
+  assert.equal(red.data.balance, before - rw.cost);
+  const red2 = await call('POST', '/api/pos/redeem', { memberId: mid, rewardId: rw.id, ref: 'R3', subtotal: 500 }, posHL01);
+  assert.equal(red2.data.balance, before - rw.cost);
+  assert.equal((await call('POST', '/api/pos/coupons/release', { couponId: red.data.coupon.id, ref: 'R3' }, posHL01)).data.released, true);
+
+  // หน้าลูกค้าสั่งเอง: ต้องมีรหัสยืนยันจาก LINE
+  assert.equal((await call('POST', '/api/pos/members/wallet', { memberId: mid, requireVerify: true }, posHL01)).status, 401);
+  assert.equal((await call('POST', '/api/pos/members/verify/send', { memberId: mid }, posHL01)).status, 200);
+  const msg = await mods.db.one("SELECT data FROM line_messages WHERE line_user_id = 'Upospay01' AND kind = 'text' ORDER BY id DESC LIMIT 1");
+  const code = /(\d{4})/.exec(msg.data.text)[1];
+  assert.equal((await call('POST', '/api/pos/members/verify/check', { memberId: mid, code: code === '0000' ? '1111' : '0000' }, posHL01)).status, 400);
+  const ok = await call('POST', '/api/pos/members/verify/check', { memberId: mid, code }, posHL01);
+  assert.ok(ok.data.verifyToken);
+  assert.equal((await call('POST', '/api/pos/members/wallet', { memberId: mid, requireVerify: true, verifyToken: ok.data.verifyToken }, posHL01)).status, 200);
+  assert.equal((await call('POST', '/api/pos/members/wallet', { memberId: 'MB-0000001', requireVerify: true, verifyToken: ok.data.verifyToken }, posHL01)).status, 401);
+
+  // บิลมาถึงช้า คูปองใช้ไม่ได้แล้ว: ยังบันทึกบิล ใช้ส่วนลดที่ POS ให้ไป ไม่ตัดคูปอง
+  const late = await call('POST', '/api/pos/transactions', { posBillId: 'CPN-2', memberId: mid, couponIds: [welcome.id], couponRef: 'R9', couponDiscount: 30, paidTotal: 270, items: [{ id: 'a', name: 'x', price: 300, qty: 1 }] }, posHL01);
+  assert.equal(late.status, 200, JSON.stringify(late.data));
+  assert.equal(Number(late.data.discount), 30);
+  assert.deepEqual(late.data.coupons, []);
+});
