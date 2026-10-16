@@ -113,3 +113,7 @@ h1, h2, h3 { font-family: var(--f-display); font-weight: 600; margin: 0; }
 .sheet { position: fixed; left: 0; right: 0; bottom: 0; z-index: 21; background: #fff; border-radius: 20px 20px 0 0; padding: 18px 18px calc(18px + env(safe-area-inset-bottom, 0px)); display: flex; flex-direction: column; gap: 10px; max-width: 480px; margin: 0 auto; }
 .toast { position: fixed; left: 50%; bottom: calc(80px + env(safe-area-inset-bottom, 0px)); transform: translateX(-50%); background: var(--dark); color: #fff; padding: 10px 16px; border-radius: 12px; font-weight: 600; z-index: 30; max-width: calc(100% - 32px); text-align: center; }
 .devbar { background: #FBF0D9; color: #8A5A00; font-size: 12px; text-align: center; padding: 4px 8px; }
+
+.pin { margin-top: 6px; display: flex; flex-direction: column; align-items: center; gap: 2px; border-top: 1px dashed var(--line); padding-top: 8px; width: 100%; }
+.pin small { font-size: 12px; color: var(--muted); }
+.pin b { font-family: var(--f-display); font-size: 26px; letter-spacing: 4px; color: var(--ai); }

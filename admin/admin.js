@@ -332,6 +332,10 @@
       '<label class="check"><input type="checkbox" name="promoOn"' + (r.promo_on ? ' checked' : '') + '>คูณแต้มประจำสัปดาห์</label>' +
       '<div class="field"><label for="r-day">วัน</label><select id="r-day" name="promoDay">' + DAYS.map((d, i) => '<option value="' + i + '"' + (r.promo_day === i ? ' selected' : '') + '>' + d + '</option>').join('') + '</select></div>' +
       '<div class="field"><label for="r-mult">คูณ</label><input id="r-mult" name="promoMult" type="number" min="1" step="0.5" value="' + Number(r.promo_mult) + '"></div>' +
+      '<div class="field"><label for="r-notify">แจ้งแต้มทาง LINE หลังชำระบิล</label><select id="r-notify" name="pointsNotify">' +
+        [['off', 'ไม่แจ้ง (ไม่เสียโควต้าข้อความ)'], ['all', 'แจ้งทุกบิล'], ['min', 'แจ้งเมื่อยอดบิลถึง…']].map((o) => '<option value="' + o[0] + '"' + ((r.points_notify || 'off') === o[0] ? ' selected' : '') + '>' + o[1] + '</option>').join('') + '</select>' +
+        '<span class="hint">ข้อความแจ้งแต้มนับโควต้าข้อความของ LINE OA · ลูกค้าดูแต้มในบัตรสมาชิกได้ตลอด</span></div>' +
+      '<div class="field"><label for="r-nmin">ยอดบิลขั้นต่ำที่แจ้ง (บาท)</label><input id="r-nmin" name="pointsNotifyMin" type="number" min="0" value="' + (Number(r.points_notify_min) || '') + '" placeholder="ใช้เมื่อเลือก แจ้งเมื่อยอดบิลถึง…"></div>' +
       '</div><small class="muted">มีผลกับบิลหลังบันทึก บิลเก่าคิดตามกฎเดิม · ใช้อยู่ตั้งแต่ ' + date(r.effective_from) + '</small>' + (S.err ? '<div class="err" role="alert">' + esc(S.err) + '</div>' : '') +
       '<div class="actions"><button class="btn">บันทึกกฎแต้ม</button></div></form>';
   }
@@ -548,6 +552,7 @@
     rule: async (o) => {
       await api('PUT', '/api/admin/earn-rules/' + S.brand, { baht: o.baht, pts: o.pts, base: o.base, rounding: o.rounding, welcome: Number(o.welcome), expiryMonths: Number(o.expiryMonths), backdays: Number(o.backdays),
         tiers: { gold: Number(o.gold), platinum: Number(o.platinum) }, promo: { on: o.promoOn, day: Number(o.promoDay), mult: Number(o.promoMult) } });
+      await api('PATCH', '/api/admin/brands/' + S.brand + '/notify', { pointsNotify: o.pointsNotify, pointsNotifyMin: o.pointsNotifyMin });
       S.err = ''; toast('บันทึกกฎแต้มแล้ว'); await load();
     },
     password: async (o) => {

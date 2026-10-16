@@ -78,10 +78,10 @@ export default function (r) {
     return tx((db) => core.sendMemberCode(db, { memberId: id, brandId: t.brandId }));
   });
   r.post('/api/pos/members/verify/check', async (req, body) => {
-    await posTerminal(req);
     const id = String(body.memberId || '');
-    const ok = await tx((db) => core.checkMemberCode(db, { memberId: id, code: body.code }));
-    if (!ok) throw bad('code_invalid', 'รหัสไม่ถูกต้องหรือหมดอายุ ขอรหัสใหม่ได้');
+    const t = await posTerminal(req);
+    const ok = await tx((db) => core.checkMemberCode(db, { memberId: id, code: body.code, brandId: t.brandId }));
+    if (!ok) throw bad('code_invalid', 'รหัสไม่ถูกต้อง ดูรหัส 6 หลักล่าสุดในบัตรสมาชิกแล้วลองใหม่');
     return { verifyToken: signToken({ vm: id }, 3600) };
   });
 

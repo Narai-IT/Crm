@@ -405,10 +405,14 @@ t('หน้าร้าน: ดูคูปอง/รางวัล · จอ�
 
   // หน้าลูกค้าสั่งเอง: ต้องมีรหัสยืนยันจาก LINE
   assert.equal((await call('POST', '/api/pos/members/wallet', { memberId: mid, requireVerify: true }, posHL01)).status, 401);
-  assert.equal((await call('POST', '/api/pos/members/verify/send', { memberId: mid }, posHL01)).status, 200);
-  const msg = await mods.db.one("SELECT data FROM line_messages WHERE line_user_id = 'Upospay01' AND kind = 'text' ORDER BY id DESC LIMIT 1");
-  const code = /(\d{4})/.exec(msg.data.text)[1];
-  assert.equal((await call('POST', '/api/pos/members/verify/check', { memberId: mid, code: code === '0000' ? '1111' : '0000' }, posHL01)).status, 400);
+  // รหัส 6 หลักจากบัตรสมาชิก (ไม่ส่งข้อความ LINE)
+  const msgsBefore = (await mods.db.one("SELECT count(*)::int AS n FROM line_messages WHERE line_user_id = 'Upospay01'")).n;
+  const sendRes = await call('POST', '/api/pos/members/verify/send', { memberId: mid }, posHL01);
+  assert.equal(sendRes.data.mode, 'card');
+  assert.equal((await mods.db.one("SELECT count(*)::int AS n FROM line_messages WHERE line_user_id = 'Upospay01'")).n, msgsBefore);
+  const code = (await call('GET', '/api/liff/qr', undefined, u)).data.pin;
+  assert.match(code, /^\d{6}$/);
+  assert.equal((await call('POST', '/api/pos/members/verify/check', { memberId: mid, code: code === '000000' ? '111111' : '000000' }, posHL01)).status, 400);
   const ok = await call('POST', '/api/pos/members/verify/check', { memberId: mid, code }, posHL01);
   assert.ok(ok.data.verifyToken);
   assert.equal((await call('POST', '/api/pos/members/wallet', { memberId: mid, requireVerify: true, verifyToken: ok.data.verifyToken }, posHL01)).status, 200);
@@ -419,4 +423,26 @@ t('หน้าร้าน: ดูคูปอง/รางวัล · จอ�
   assert.equal(late.status, 200, JSON.stringify(late.data));
   assert.equal(Number(late.data.discount), 30);
   assert.deepEqual(late.data.coupons, []);
+});
+
+t('แจ้งแต้มทาง LINE: ค่าเริ่มต้นไม่แจ้ง · เปิดทุกบิล · เฉพาะบิลยอดถึงขั้นต่ำ', async () => {
+  const u = { 'x-dev-line-user': 'Unotify01' };
+  await call('POST', '/api/liff/register', { brand: 'humlai', name: 'แจ้งเตือน', phone: '0844440000', privacy: true }, u);
+  const mid = (await call('GET', '/api/liff/me', undefined, u)).data.member.id;
+  const pts = () => mods.db.one("SELECT count(*)::int AS n FROM line_messages WHERE line_user_id = 'Unotify01' AND kind = 'points'").then((r) => r.n);
+  const bill = (no, price) => call('POST', '/api/pos/transactions', { posBillId: no, memberId: mid, items: [{ id: 'a', name: 'x', price, qty: 1 }] }, posHL01);
+  await mods.db.q("UPDATE brands SET points_notify = 'off' WHERE id = 'humlai'");
+  await bill('NT-1', 100);
+  assert.equal(await pts(), 0);
+  const adm = { authorization: 'Bearer ' + (await call('POST', '/api/admin/login', { username: 'S003', password: 'demo1234' })).data.token };
+  assert.equal((await call('PATCH', '/api/admin/brands/humlai/notify', { pointsNotify: 'min', pointsNotifyMin: 200 }, adm)).status, 200);
+  await bill('NT-2', 100);
+  assert.equal(await pts(), 0);
+  await bill('NT-3', 250);
+  assert.equal(await pts(), 1);
+  assert.equal((await call('PATCH', '/api/admin/brands/humlai/notify', { pointsNotify: 'all' }, adm)).status, 200);
+  await bill('NT-4', 50);
+  assert.equal(await pts(), 2);
+  const rule = (await call('GET', '/api/admin/earn-rules', undefined, adm)).data.find((r) => r.brand_id === 'humlai');
+  assert.equal(rule.points_notify, 'all');
 });
