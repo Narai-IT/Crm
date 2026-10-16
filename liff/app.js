@@ -69,6 +69,10 @@
         if (!tok) return fatal('ตั้งค่า LIFF ยังไม่ครบ', 'LIFF app ต้องเปิดสิทธิ์ (scope) openid และ profile');
         S.auth = { authorization: 'Bearer ' + tok };
         S.inClient = window.liff.isInClient();
+        // เปิดผ่าน liff.line.me: LINE ส่ง ?brand= มาใน liff.state แล้ว liff.init() ค่อยใส่กลับเข้า URL จึงต้องอ่านใหม่หลัง init
+        const p2 = new URLSearchParams(location.search);
+        if (p2.get('brand') && brands.some((b) => b.id === p2.get('brand')) && p2.get('brand') !== S.brand) { S.brand = p2.get('brand'); applyTheme(); }
+        if (p2.get('tab')) S.tab = p2.get('tab');
       } else if (cfg.dev) {
         // ผู้ใช้ทดสอบประจำเบราว์เซอร์ (ID ไม่ใช่รูปแบบ LINE จริง จึงสวมเป็นลูกค้าจริงไม่ได้)
         let id = null; try { id = localStorage.getItem('crm-liff-dev-user'); } catch (e) { /* ignore */ }
