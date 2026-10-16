@@ -57,6 +57,7 @@ npm start
 |---|---|
 | `npm run dev` | รันแบบรีสตาร์ตอัตโนมัติเมื่อแก้โค้ด |
 | `npm test` | ทดสอบทั้ง flow กับ `TEST_DATABASE_URL` (ฐานข้อมูลนี้ถูกล้างทุกครั้ง) |
+| `npm run db:clear-demo` | ดูว่าจะลบข้อมูลตัวอย่างอะไรบ้าง · เพิ่ม `-- --yes` เพื่อลบจริง · `-- --settings --yes` ลบของรางวัล คูปอง สาขาตัวอย่างด้วย |
 | `npm run db:reset` | ลบข้อมูลทั้งหมดแล้ว seed ใหม่ (ทำได้เฉพาะ `DEV_MODE=1`) |
 | `node --env-file=.env scripts/manage.js pos-key HL01` | ออก API key ใหม่ให้เครื่อง POS ของสาขา |
 | `node --env-file=.env scripts/manage.js password admin <รหัสใหม่>` | ตั้งรหัสผ่านพนักงานหลังบ้าน (ใช้ตอนลืมรหัส admin) |

@@ -11,6 +11,7 @@
     "db:migrate": "node --env-file=.env scripts/migrate.js",
     "db:seed": "node --env-file=.env scripts/seed.js",
     "db:reset": "node --env-file=.env scripts/migrate.js --reset && node --env-file=.env scripts/seed.js",
+    "db:clear-demo": "node --env-file=.env scripts/clear-demo.js",
     "test": "node --env-file=.env --test test/*.test.js"
   },
   "dependencies": {
