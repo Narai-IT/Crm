@@ -1,13 +1,49 @@
 // API หลังบ้าน · ตรวจตำแหน่ง + ขอบเขตแบรนด์/สาขาทุกครั้งฝั่ง server
 import { q, one, tx } from '../db.js';
 import { bad, notFound, HttpError } from '../http.js';
-import { staffUser, loadStaff, requirePage, requireBrand, scopeBrands } from '../auth.js';
-import { checkPassword, signToken, maskPhone } from '../util.js';
+import { staffUser, loadStaff, requirePage, requireBrand, scopeBrands, ROLE_PAGES, ROLE_NAMES, ROLE_SCOPE } from '../auth.js';
+import { checkPassword, hashPassword, signToken, maskPhone } from '../util.js';
 import * as core from '../services/core.js';
 import { queueMessage } from '../services/line.js';
 import { COUPON_SQL, couponView } from './liff.js';
 
 const actor = (s) => ({ type: 'staff', id: s.id, name: s.name });
+
+
+function checkNewPassword(pw, id) {
+  pw = String(pw || '');
+  if (pw.length < 8) throw bad('password_short', 'รหัสผ่านต้องมีอย่างน้อย 8 ตัวอักษร');
+  if (pw.toLowerCase() === String(id).toLowerCase() || ['admin', 'password', '12345678', 'demo1234'].includes(pw.toLowerCase())) throw bad('password_weak', 'รหัสผ่านนี้เดาง่ายเกินไป');
+  return pw;
+}
+// ตรวจตำแหน่ง + ขอบเขต: ผู้ดูแลระบบ/การตลาด = ทั้งเครือ · ผู้จัดการแบรนด์ = แบรนด์ · ผู้จัดการสาขา/แคชเชียร์ = สาขา
+async function staffFields(b, keepScopes) {
+  const name = String(b.name || '').trim();
+  if (!name) throw bad('name_required', 'ใส่ชื่อพนักงาน');
+  if (!ROLE_PAGES[b.role]) throw bad('role_invalid', 'เลือกตำแหน่ง');
+  const scope = ROLE_SCOPE[b.role];
+  const email = String(b.email || '').trim() || null;
+  if (keepScopes) return { name, role: b.role, email, scope, scopeIds: null, limit: null };
+  let ids = scope === 'group' ? ['*'] : [...new Set((b.scopeIds || []).map(String))];
+  if (scope !== 'group') {
+    if (!ids.length) throw bad('scope_required', scope === 'brand' ? 'เลือกแบรนด์ที่ดูแลอย่างน้อย 1 แบรนด์' : 'เลือกสาขาอย่างน้อย 1 สาขา');
+    const ok = await q(scope === 'brand' ? 'SELECT id FROM brands WHERE id = ANY($1)' : 'SELECT id FROM branches WHERE id = ANY($1)', [ids]);
+    if (ok.length !== ids.length) throw bad('scope_invalid', 'มีแบรนด์หรือสาขาที่ไม่ถูกต้อง');
+  }
+  const limit = b.role === 'branchmgr' ? (b.approveLimit === '' || b.approveLimit == null ? 200 : Math.max(0, parseInt(b.approveLimit, 10) || 0)) : null;
+  return { name, role: b.role, email, scope, scopeIds: ids, limit };
+}
+async function setScopes(db, id, f) {
+  if (!f.scopeIds) {
+    // เปลี่ยนตำแหน่งโดยไม่ได้ส่งขอบเขตมา: ใช้ได้เฉพาะตำแหน่งที่ขอบเขตแบบเดิม
+    const cur = await db.q('SELECT scope_type, scope_id, approve_limit FROM staff_scopes WHERE staff_id = $1', [id]);
+    if (cur.some((c) => c.scope_type !== f.scope)) throw bad('scope_required', 'ตำแหน่งใหม่ต้องเลือกขอบเขตใหม่');
+    if (f.role !== 'branchmgr') await db.q('UPDATE staff_scopes SET approve_limit = NULL WHERE staff_id = $1', [id]);
+    return;
+  }
+  await db.q('DELETE FROM staff_scopes WHERE staff_id = $1', [id]);
+  for (const sid of f.scopeIds) await db.q('INSERT INTO staff_scopes (staff_id, scope_type, scope_id, approve_limit) VALUES ($1,$2,$3,$4)', [id, f.scope, sid, f.limit]);
+}
 
 const CATS = ['food', 'side', 'drink', 'discount'];
 const optInt = (v) => (v === '' || v === null || v === undefined ? null : Math.max(0, parseInt(v, 10) || 0));
@@ -61,9 +97,23 @@ export default function (r) {
     if (!s || !checkPassword(String(body.password || ''), s.password_hash)) throw new HttpError(401, 'login_failed', 'ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง');
     const st = await loadStaff(s.id);
     if (!st.pages.length) throw new HttpError(403, 'forbidden', 'ตำแหน่งนี้ไม่มีสิทธิ์เข้าหลังบ้าน');
+    await q('UPDATE staff SET last_login_at = now() WHERE id = $1', [s.id]);
     return { token: signToken({ sid: s.id }), staff: st };
   });
   r.get('/api/admin/me', async (req) => staffUser(req));
+  // เปลี่ยนรหัสผ่านตัวเอง (บังคับครั้งแรกสำหรับรหัสเริ่มต้น/รหัสชั่วคราว)
+  r.post('/api/admin/password', async (req, b) => {
+    const s = await staffUser(req);
+    const row = await one('SELECT password_hash FROM staff WHERE id = $1', [s.id]);
+    if (!checkPassword(String(b.current || ''), row.password_hash)) throw bad('wrong_password', 'รหัสผ่านเดิมไม่ถูกต้อง');
+    const pw = checkNewPassword(b.password, s.id);
+    if (checkPassword(pw, row.password_hash)) throw bad('same_password', 'รหัสผ่านใหม่ต้องไม่ซ้ำกับรหัสเดิม');
+    await tx(async (db) => {
+      await db.q('UPDATE staff SET password_hash = $2, must_change_password = false WHERE id = $1', [s.id, hashPassword(pw)]);
+      await core.audit(db, actor(s), 'change_password', { type: 'staff', id: s.id }, 'เปลี่ยนรหัสผ่านตัวเอง');
+    });
+    return { ok: true, staff: await loadStaff(s.id) };
+  });
 
   r.get('/api/admin/dashboard', async (req, _b, url) => {
     const s = await staffUser(req); requirePage(s, 'dash');
@@ -306,7 +356,55 @@ export default function (r) {
 
   r.get('/api/admin/staff', async (req) => {
     const s = await staffUser(req); requirePage(s, 'staff');
-    return q("SELECT st.id, st.name, st.role, st.email, st.is_active, json_agg(json_build_object('type', sc.scope_type, 'id', sc.scope_id)) AS scopes FROM staff st LEFT JOIN staff_scopes sc ON sc.staff_id = st.id GROUP BY st.id ORDER BY st.id");
+    const rows = await q(`SELECT st.id, st.name, st.role, st.email, st.is_active, st.must_change_password, st.last_login_at, st.created_at,
+        COALESCE(json_agg(json_build_object('type', sc.scope_type, 'id', sc.scope_id, 'limit', sc.approve_limit)) FILTER (WHERE sc.staff_id IS NOT NULL), '[]') AS scopes
+      FROM staff st LEFT JOIN staff_scopes sc ON sc.staff_id = st.id GROUP BY st.id ORDER BY st.is_active DESC, st.id`);
+    return { staff: rows, roles: Object.keys(ROLE_PAGES).map((k) => ({ id: k, name: ROLE_NAMES[k], scope: ROLE_SCOPE[k], pages: ROLE_PAGES[k] })) };
+  });
+  r.post('/api/admin/staff', async (req, b) => {
+    const s = await staffUser(req); requirePage(s, 'staff');
+    const id = String(b.id || '').trim();
+    if (!/^[A-Za-z0-9._-]{3,30}$/.test(id)) throw bad('id_invalid', 'ชื่อผู้ใช้ต้องเป็นตัวอังกฤษ/ตัวเลข 3-30 ตัว (ใช้ . _ - ได้)');
+    const f = await staffFields(b);
+    const pw = checkNewPassword(b.password, id);
+    return tx(async (db) => {
+      if (await db.one('SELECT 1 FROM staff WHERE lower(id) = lower($1)', [id])) throw new HttpError(409, 'staff_exists', 'มีชื่อผู้ใช้นี้แล้ว');
+      if (f.email && await db.one('SELECT 1 FROM staff WHERE lower(email) = lower($1)', [f.email])) throw new HttpError(409, 'email_exists', 'อีเมลนี้มีผู้ใช้แล้ว');
+      await db.q('INSERT INTO staff (id, name, role, email, password_hash, must_change_password) VALUES ($1,$2,$3,$4,$5,true)', [id, f.name, f.role, f.email, hashPassword(pw)]);
+      await setScopes(db, id, f);
+      await core.audit(db, actor(s), 'create_staff', { type: 'staff', id }, f.name + ' · ' + ROLE_NAMES[f.role] + ' · ' + f.scopeIds.join(', '));
+      return { id };
+    });
+  });
+  r.patch('/api/admin/staff/:id', async (req, b, _u, p) => {
+    const s = await staffUser(req); requirePage(s, 'staff');
+    const old = await one('SELECT id, name, role, email, is_active FROM staff WHERE id = $1', [p.id]);
+    if (!old) throw notFound('ไม่พบผู้ใช้');
+    const f = await staffFields({ name: b.name ?? old.name, role: b.role ?? old.role, email: 'email' in b ? b.email : old.email, scopeIds: b.scopeIds, approveLimit: b.approveLimit }, !b.scopeIds);
+    const active = b.active ?? old.is_active;
+    if (old.id === s.id && (!active || f.role !== 'super')) throw bad('self_lock', 'ปิดหรือลดสิทธิ์บัญชีที่ตัวเองใช้อยู่ไม่ได้');
+    return tx(async (db) => {
+      if (old.role === 'super' && (f.role !== 'super' || !active)) {
+        const n = await db.one("SELECT count(*)::int AS n FROM staff WHERE role = 'super' AND is_active AND id <> $1", [old.id]);
+        if (!n.n) throw bad('last_admin', 'ต้องมีผู้ดูแลระบบที่ใช้งานได้อย่างน้อย 1 คน');
+      }
+      if (f.email && await db.one('SELECT 1 FROM staff WHERE lower(email) = lower($1) AND id <> $2', [f.email, old.id])) throw new HttpError(409, 'email_exists', 'อีเมลนี้มีผู้ใช้แล้ว');
+      await db.q('UPDATE staff SET name = $2, role = $3, email = $4, is_active = $5 WHERE id = $1', [old.id, f.name, f.role, f.email, active]);
+      if (b.scopeIds || f.role !== old.role) await setScopes(db, old.id, f);
+      await core.audit(db, actor(s), 'update_staff', { type: 'staff', id: old.id }, f.name + ' · ' + ROLE_NAMES[f.role] + (active ? '' : ' · ปิดใช้งาน'), old, { ...f, is_active: active });
+      return { id: old.id };
+    });
+  });
+  // ตั้งรหัสผ่านชั่วคราวให้พนักงาน (เข้าครั้งถัดไปต้องเปลี่ยนเอง)
+  r.post('/api/admin/staff/:id/password', async (req, b, _u, p) => {
+    const s = await staffUser(req); requirePage(s, 'staff');
+    const pw = checkNewPassword(b.password, p.id);
+    return tx(async (db) => {
+      const row = await db.one('UPDATE staff SET password_hash = $2, must_change_password = $3 WHERE id = $1 RETURNING id', [p.id, hashPassword(pw), p.id !== s.id]);
+      if (!row) throw notFound('ไม่พบผู้ใช้');
+      await core.audit(db, actor(s), 'reset_password', { type: 'staff', id: p.id }, 'ตั้งรหัสผ่านใหม่');
+      return { ok: true };
+    });
   });
   r.get('/api/admin/audit-logs', async (req) => {
     const s = await staffUser(req); requirePage(s, 'audit');

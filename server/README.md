@@ -59,7 +59,9 @@ npm start
 | `npm test` | ทดสอบทั้ง flow กับ `TEST_DATABASE_URL` (ฐานข้อมูลนี้ถูกล้างทุกครั้ง) |
 | `npm run db:reset` | ลบข้อมูลทั้งหมดแล้ว seed ใหม่ (ทำได้เฉพาะ `DEV_MODE=1`) |
 | `node --env-file=.env scripts/manage.js pos-key HL01` | ออก API key ใหม่ให้เครื่อง POS ของสาขา |
-| `node --env-file=.env scripts/manage.js password S001 <รหัสใหม่>` | ตั้งรหัสผ่านพนักงานหลังบ้าน |
+| `node --env-file=.env scripts/manage.js password admin <รหัสใหม่>` | ตั้งรหัสผ่านพนักงานหลังบ้าน (ใช้ตอนลืมรหัส admin) |
+
+บัญชีหลังบ้านเริ่มต้น: `admin` / `admin` (สร้างตอนเปิด server ครั้งแรก ระบบบังคับเปลี่ยนรหัสผ่านตอนเข้าครั้งแรก) · เพิ่มผู้ใช้และกำหนดสิทธิ์ที่เมนู "ผู้ใช้และสิทธิ์" ใน `/admin/`
 
 ข้อมูล seed สำหรับทดสอบ: พนักงาน `S001`–`S007` รหัสผ่าน `demo1234` · API key POS ตัวอย่าง `pos-hl01-demo-key` · โค้ดคูปอง `NEWMENU` · สมาชิกตัวอย่าง `MB-0012845` / `0812345678`
 
@@ -76,7 +78,7 @@ server/
     services/line.js           ตรวจลายเซ็น webhook, ตอบ Rich Menu, สร้าง Flex, ส่งผ่าน outbox
     routes/                    liff · pos · admin · webhook · dev
     worker.js                  ส่งข้อความหลัง commit, แต้ม/คูปองหมดอายุ
-  test/api.test.js             ทดสอบ flow หลัก 11 กรณี
+  test/api.test.js             ทดสอบ flow หลัก 12 กรณี
 ```
 
 ## API

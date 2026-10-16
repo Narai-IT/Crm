@@ -193,3 +193,35 @@ t('หลังบ้าน: แก้ของรางวัล (คูปอ�
   const u3 = { 'x-dev-line-user': 'Utest000000000000000000000000002' };
   assert.equal((await call('POST', '/api/liff/coupons/claim', { brand: 'humlai', code: 'HL50' }, u3)).status, 400);
 });
+
+t('ผู้ใช้หลังบ้าน: admin/admin ต้องเปลี่ยนรหัสก่อน · เพิ่มผู้ใช้ตามแบรนด์ · ปิดใช้งาน · ต้องเหลือผู้ดูแลอย่างน้อย 1 คน', async () => {
+  const { ensureDefaultAdmin } = await import('../src/auth.js');
+  assert.equal(await ensureDefaultAdmin(), true);
+  assert.equal(await ensureDefaultAdmin(), false);
+  const login = await call('POST', '/api/admin/login', { username: 'admin', password: 'admin' });
+  assert.equal(login.status, 200);
+  assert.equal(login.data.staff.mustChange, true);
+  const adm = { authorization: 'Bearer ' + login.data.token };
+  assert.equal((await call('GET', '/api/admin/rewards', undefined, adm)).status, 403);
+  assert.equal((await call('POST', '/api/admin/password', { current: 'admin', password: 'admin' }, adm)).status, 400);
+  assert.equal((await call('POST', '/api/admin/password', { current: 'admin', password: 'Humlai-2026' }, adm)).status, 200);
+  assert.equal((await call('GET', '/api/admin/rewards', undefined, adm)).status, 200);
+  assert.equal((await call('POST', '/api/admin/login', { username: 'admin', password: 'admin' })).status, 401);
+
+  const add = await call('POST', '/api/admin/staff', { id: 'hl.manager', name: 'ผจก หำไหล', role: 'brand', scopeIds: ['humlai'], password: 'Temp-pass-1' }, adm);
+  assert.equal(add.status, 200, JSON.stringify(add.data));
+  assert.equal((await call('POST', '/api/admin/staff', { id: 'x1', name: 'x', role: 'brand', scopeIds: [], password: 'Temp-pass-1' }, adm)).status, 400);
+  const hl = await call('POST', '/api/admin/login', { username: 'hl.manager', password: 'Temp-pass-1' });
+  assert.equal(hl.data.staff.mustChange, true);
+  assert.deepEqual(hl.data.staff.brands, ['humlai']);
+  const hlh = { authorization: 'Bearer ' + hl.data.token };
+  await call('POST', '/api/admin/password', { current: 'Temp-pass-1', password: 'My-own-pass-9' }, hlh);
+  assert.equal((await call('GET', '/api/admin/staff', undefined, hlh)).status, 403);
+  assert.equal((await call('PATCH', '/api/admin/staff/hl.manager', { active: false }, adm)).status, 200);
+  assert.equal((await call('GET', '/api/admin/rewards', undefined, hlh)).status, 401);
+
+  assert.equal((await call('PATCH', '/api/admin/staff/admin', { active: false }, adm)).status, 400);
+  for (const id of ['S001']) assert.equal((await call('PATCH', '/api/admin/staff/' + id, { active: false }, adm)).status, 200);
+  const list = (await call('GET', '/api/admin/staff', undefined, adm)).data;
+  assert.ok(list.roles.find((r) => r.id === 'cashier'));
+});

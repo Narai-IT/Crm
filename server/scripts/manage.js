@@ -17,7 +17,7 @@ try {
     console.log('เครื่อง ' + id + '\nAPI key (เก็บไว้ในเครื่อง POS ระบบจะไม่แสดงอีก): ' + key);
   } else if (cmd === 'password') {
     if (!a || !b || b.length < 8) throw new Error('ใช้: password <staffId> <รหัสผ่านอย่างน้อย 8 ตัว>');
-    const r = await q('UPDATE staff SET password_hash = $2 WHERE id = $1 RETURNING id', [a, hashPassword(b)]);
+    const r = await q('UPDATE staff SET password_hash = $2, must_change_password = false, is_active = true WHERE id = $1 RETURNING id', [a, hashPassword(b)]);
     if (!r.length) throw new Error('ไม่พบพนักงาน ' + a);
     console.log('ตั้งรหัสผ่านให้ ' + a + ' แล้ว');
   } else {

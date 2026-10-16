@@ -7,6 +7,7 @@ import { DEV, REQUIRE_OTP } from './util.js';
 import { logApi, kindOf } from './apilog.js';
 import { startWorker, drainOutbox } from './worker.js';
 import { pool } from './db.js';
+import { ensureDefaultAdmin } from './auth.js';
 import liff from './routes/liff.js';
 import pos from './routes/pos.js';
 import admin from './routes/admin.js';
@@ -68,6 +69,8 @@ export function buildServer() {
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   const port = Number(process.env.PORT || 3000);
+  ensureDefaultAdmin().then((made) => { if (made) console.log('สร้างบัญชีหลังบ้านเริ่มต้น admin / admin แล้ว (ระบบจะให้เปลี่ยนรหัสผ่านตอนเข้าครั้งแรก)'); })
+    .catch((e) => console.error('สร้างบัญชี admin ไม่สำเร็จ (รัน npm run db:migrate แล้วหรือยัง?):', e.message));
   buildServer().listen(port, () => {
     console.log('Group CRM พร้อมใช้งานที่ http://localhost:' + port + (DEV ? '  (DEV_MODE: เปิดหน้าเดโมที่ลิงก์นี้ได้เลย)' : ''));
   });

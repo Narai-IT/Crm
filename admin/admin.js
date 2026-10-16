@@ -10,8 +10,11 @@
   };
   const MENU = [
     ['dash', 'dash', 'ภาพรวม'], ['rewards', 'rewards', 'ของรางวัล'], ['coupons', 'rewards', 'คูปอง'], ['rules', 'rules', 'กฎแต้ม'],
-    ['members', 'members', 'สมาชิก'], ['approvals', 'approvals', 'อนุมัติแต้ม'], ['branches', 'branches', 'สาขา']
+    ['members', 'members', 'สมาชิก'], ['approvals', 'approvals', 'อนุมัติแต้ม'], ['branches', 'branches', 'สาขา'],
+    ['staff', 'staff', 'ผู้ใช้และสิทธิ์'], ['audit', 'audit', 'ประวัติการแก้ไข']
   ];
+  const NO_BRAND = ['staff', 'audit'];
+  const PAGE_NAMES = { dash: 'ภาพรวม', members: 'สมาชิก', approvals: 'อนุมัติแต้ม', rules: 'กฎแต้ม', rewards: 'ของรางวัล/คูปอง', branches: 'สาขา', staff: 'ผู้ใช้และสิทธิ์', audit: 'ประวัติการแก้ไข' };
   const CATS = { food: 'อาหาร', side: 'ทานเล่น', drink: 'เครื่องดื่ม', discount: 'ส่วนลด' };
   const DAYS = ['อาทิตย์', 'จันทร์', 'อังคาร', 'พุธ', 'พฤหัสบดี', 'ศุกร์', 'เสาร์'];
   const TH_M = ['ม.ค.', 'ก.พ.', 'มี.ค.', 'เม.ย.', 'พ.ค.', 'มิ.ย.', 'ก.ค.', 'ส.ค.', 'ก.ย.', 'ต.ค.', 'พ.ย.', 'ธ.ค.'];
@@ -69,6 +72,7 @@
     } catch (e) { if (!e.silent) $app.innerHTML = '<div class="center"><div class="login"><h2>เปิดหลังบ้านไม่สำเร็จ</h2><p class="muted">' + esc(e.message) + '</p><button class="btn" data-a="reload">ลองอีกครั้ง</button></div></div>'; }
   }
   async function enter() {
+    if (S.staff.mustChange) return passwordView(true);
     S.brands = S.allBrands.filter((b) => S.staff.brands.includes(b.id));
     const saved = store.get('crm-admin-brand');
     S.brand = [saved, 'humlai', S.brands[0] && S.brands[0].id].find((x) => x && S.brands.some((b) => b.id === x));
@@ -84,6 +88,16 @@
       (msg ? '<div class="err" role="alert">' + esc(msg) + '</div>' : '') + '<button class="btn">เข้าสู่ระบบ</button></form></div>';
     const u = document.getElementById('u'); if (u) u.focus();
   }
+  function passwordView(forced, msg) {
+    $app.innerHTML = '<div class="center"><form class="login" data-f="password"><h1>' + (forced ? 'ตั้งรหัสผ่านใหม่' : 'เปลี่ยนรหัสผ่าน') + '</h1>' +
+      '<span class="muted">' + (forced ? 'บัญชี ' + esc(S.staff.id) + ' ใช้รหัสผ่านเริ่มต้นหรือรหัสชั่วคราวอยู่ ต้องตั้งรหัสใหม่ก่อนใช้งาน' : esc(S.staff.name) + ' · ' + esc(S.staff.id)) + '</span>' +
+      '<div class="field"><label for="pc">รหัสผ่านปัจจุบัน</label><input id="pc" name="current" type="password" autocomplete="current-password" required></div>' +
+      '<div class="field"><label for="pn">รหัสผ่านใหม่ (อย่างน้อย 8 ตัว)</label><input id="pn" name="password" type="password" autocomplete="new-password" minlength="8" required></div>' +
+      '<div class="field"><label for="pn2">พิมพ์รหัสผ่านใหม่อีกครั้ง</label><input id="pn2" name="confirm" type="password" autocomplete="new-password" minlength="8" required></div>' +
+      (msg ? '<div class="err" role="alert">' + esc(msg) + '</div>' : '') +
+      '<button class="btn">บันทึกรหัสผ่าน</button>' + (forced ? '<button type="button" class="btn ghost" data-a="logout">ออกจากระบบ</button>' : '<button type="button" class="btn ghost" data-a="backHome">ยกเลิก</button>') + '</form></div>';
+    const f = document.getElementById('pc'); if (f) f.focus();
+  }
   function logout(msg) { S.token = null; S.staff = null; store.set('crm-admin-token', null); loginView(msg); }
 
   /* ---------- โหลดข้อมูลของแต่ละหน้า ---------- */
@@ -96,6 +110,8 @@
     if (S.page === 'members') { d.members = await api('GET', '/api/admin/members?brand=' + b + '&q=' + encodeURIComponent(S.q)); if (S.member) await openMember(S.member.member.id); }
     if (S.page === 'approvals') d.approvals = await api('GET', '/api/admin/point-adjustments');
     if (S.page === 'branches') d.branches = await api('GET', '/api/admin/branches');
+    if (S.page === 'staff') d.staff = await api('GET', '/api/admin/staff');
+    if (S.page === 'audit') d.audit = await api('GET', '/api/admin/audit-logs');
     render();
   }
   async function openMember(id) { S.member = await api('GET', '/api/admin/members/' + encodeURIComponent(id)); }
@@ -104,12 +120,12 @@
   function render() {
     const menu = MENU.filter((m) => can(m[1]));
     const title = (MENU.find((m) => m[0] === S.page) || [])[2] || '';
-    const views = { dash: dashView, rewards: rewardsView, coupons: couponsView, rules: rulesView, members: membersView, approvals: approvalsView, branches: branchesView };
+    const views = { dash: dashView, rewards: rewardsView, coupons: couponsView, rules: rulesView, members: membersView, approvals: approvalsView, branches: branchesView, staff: staffView, audit: auditView };
     $app.innerHTML = '<div class="shell"><nav class="side" aria-label="เมนูหลังบ้าน"><div class="logo">หลังบ้าน CRM</div>' +
       menu.map((m) => '<button data-a="page" data-v="' + m[0] + '"' + (S.page === m[0] ? ' aria-current="page"' : '') + '>' + m[2] + '</button>').join('') +
-      '<div class="who">' + esc(S.staff.name) + ' · ' + esc(S.staff.id) + '<br><button data-a="logout">ออกจากระบบ</button></div></nav>' +
+      '<div class="who">' + esc(S.staff.name) + ' · ' + esc(S.staff.id) + '<br><button data-a="myPassword">เปลี่ยนรหัสผ่าน</button><button data-a="logout">ออกจากระบบ</button></div></nav>' +
       '<main class="main"><div class="top"><h1>' + esc(title) + '</h1>' +
-      (S.brands.length > 1 ? '<div class="bpick" role="group" aria-label="เลือกแบรนด์">' + S.brands.map((b) => '<button data-a="brand" data-v="' + b.id + '" aria-pressed="' + (b.id === S.brand) + '">' + esc(b.short_name) + '</button>').join('') + '</div>' : '<b>' + esc(brand().name) + '</b>') +
+      (NO_BRAND.includes(S.page) ? '' : S.brands.length > 1 ? '<div class="bpick" role="group" aria-label="เลือกแบรนด์">' + S.brands.map((b) => '<button data-a="brand" data-v="' + b.id + '" aria-pressed="' + (b.id === S.brand) + '">' + esc(b.short_name) + '</button>').join('') + '</div>' : '<b>' + esc(brand().name) + '</b>') +
       '</div>' + views[S.page]() + '</main></div>' + (S.edit ? dialog() : '');
     const auto = document.querySelector('[data-autofocus]'); if (auto) auto.focus();
   }
@@ -263,11 +279,68 @@
       '</tbody></table></div><small class="muted">เพิ่มสาขาหรือแก้ชื่อสาขา แจ้งผู้ดูแลระบบ</small></div>';
   }
 
+  const ROLE_PILL = { super: 'pill', marketing: 'pill', brand: 'pill', branchmgr: 'pill warn', cashier: 'pill off' };
+  function scopeText(x) {
+    const sc = x.scopes || [];
+    if (!sc.length) return '-';
+    if (sc.some((c) => c.type === 'group')) return 'ทุกแบรนด์';
+    return sc.map((c) => (c.type === 'brand' ? brandName(c.id) : branchLabel(c.id)) + (c.limit ? ' (อนุมัติได้ ' + fmt(c.limit) + ' แต้ม)' : '')).join(', ');
+  }
+  function branchLabel(id) { for (const b of S.allBrands) { const x = b.branches.find((y) => y.id === id); if (x) return x.name; } return id; }
+  function staffView() {
+    const d = S.data.staff; if (!d) return '';
+    const roleName = (id) => (d.roles.find((r) => r.id === id) || {}).name || id;
+    return '<div class="card"><div class="hd"><h2>ผู้ใช้หลังบ้าน</h2><button class="btn" data-a="editStaff">+ เพิ่มผู้ใช้</button></div>' +
+      '<div class="wrap"><table class="tbl"><thead><tr><th>ชื่อผู้ใช้</th><th>ชื่อ</th><th>ตำแหน่ง</th><th>ดูแล</th><th>เข้าล่าสุด</th><th>สถานะ</th><th></th></tr></thead><tbody>' +
+      d.staff.map((x) => '<tr class="' + (x.is_active ? '' : 'off') + '"><td><b>' + esc(x.id) + '</b>' + (x.email ? '<br><small class="muted">' + esc(x.email) + '</small>' : '') + '</td><td>' + esc(x.name) + '</td>' +
+        '<td><span class="' + (ROLE_PILL[x.role] || 'pill') + '">' + esc(roleName(x.role)) + '</span></td><td>' + esc(scopeText(x)) + '</td><td>' + (x.last_login_at ? date(x.last_login_at) : '<span class="muted">ยังไม่เคย</span>') + '</td>' +
+        '<td>' + (!x.is_active ? '<span class="pill off">ปิดใช้งาน</span>' : x.must_change_password ? '<span class="pill warn">รอเปลี่ยนรหัส</span>' : '<span class="pill">ใช้งาน</span>') + '</td>' +
+        '<td class="r" style="white-space:nowrap"><button class="btn ghost sm" data-a="editStaff" data-v="' + esc(x.id) + '">แก้ไข</button> <button class="btn ghost sm" data-a="staffPw" data-v="' + esc(x.id) + '">ตั้งรหัสผ่าน</button></td></tr>').join('') +
+      '</tbody></table></div></div>' +
+      '<div class="card"><h2>สิทธิ์ของแต่ละตำแหน่ง</h2><div class="wrap"><table class="tbl"><thead><tr><th>เมนู</th>' + d.roles.map((r) => '<th>' + esc(r.name) + '</th>').join('') + '</tr></thead><tbody>' +
+      Object.keys(PAGE_NAMES).filter((p) => d.roles.some((r) => r.pages.includes(p))).map((p) => '<tr><td>' + PAGE_NAMES[p] + '</td>' + d.roles.map((r) => '<td>' + (r.pages.includes(p) ? '✓' : '<span class="muted">-</span>') + '</td>').join('') + '</tr>').join('') +
+      '<tr><td>ขอบเขตข้อมูล</td>' + d.roles.map((r) => '<td>' + ({ group: 'ทุกแบรนด์', brand: 'แบรนด์ที่เลือก', branch: 'สาขาที่เลือก' }[r.scope]) + '</td>').join('') + '</tr>' +
+      '</tbody></table></div><small class="muted">แคชเชียร์ไม่มีสิทธิ์เข้าหลังบ้าน (ใช้เฉพาะเครื่อง POS) · ผู้จัดการสาขาอนุมัติแต้มได้ไม่เกินวงเงินที่ตั้ง · เห็นเบอร์โทรเต็มเฉพาะผู้ดูแลระบบ</small></div>';
+  }
+  function staffForm(id) {
+    const d = S.data.staff; const x = id ? d.staff.find((y) => y.id === id) : null;
+    const role = (S.edit.role) || (x ? x.role : 'brand');
+    const scope = (d.roles.find((r) => r.id === role) || {}).scope;
+    const cur = new Set(S.edit.scopes || (x && x.role === role ? x.scopes.map((c) => c.id) : []));
+    const limit = x && x.scopes[0] && x.scopes[0].limit;
+    let scopeHtml = '';
+    if (scope === 'brand') scopeHtml = '<fieldset class="field" style="grid-column:1/-1;border:0;padding:0;margin:0"><legend style="font-size:13px;font-weight:600;color:var(--muted)">แบรนด์ที่ดูแล</legend>' + S.allBrands.map((b) => '<label class="check"><input type="checkbox" name="scope" value="' + b.id + '"' + (cur.has(b.id) ? ' checked' : '') + '>' + esc(b.name) + '</label>').join('') + '</fieldset>';
+    if (scope === 'branch') scopeHtml = '<fieldset class="field" style="grid-column:1/-1;border:0;padding:0;margin:0"><legend style="font-size:13px;font-weight:600;color:var(--muted)">สาขาที่ดูแล</legend>' + S.allBrands.map((b) => b.branches.map((br) => '<label class="check"><input type="checkbox" name="scope" value="' + br.id + '"' + (cur.has(br.id) ? ' checked' : '') + '>' + esc(br.name) + ' <small class="muted">(' + esc(b.short_name) + ')</small></label>').join('')).join('') + '</fieldset>' +
+      (role === 'branchmgr' ? '<div class="field"><label for="s-lim">อนุมัติแต้มได้ไม่เกิน (แต้มต่อครั้ง)</label><input id="s-lim" name="approveLimit" type="number" min="0" value="' + esc(limit || 200) + '"></div>' : '');
+    if (scope === 'group') scopeHtml = '<p class="muted" style="grid-column:1/-1;margin:0;font-size:14px">ตำแหน่งนี้ดูแลทุกแบรนด์ทุกสาขา</p>';
+    return '<form class="grid" data-f="staff" data-v="' + esc(id || '') + '">' +
+      (x ? '' : '<div class="field"><label for="s-id">ชื่อผู้ใช้ (ใช้ล็อกอิน)</label><input id="s-id" name="id" required pattern="[A-Za-z0-9._\-]{3,30}" autocomplete="off" data-autofocus></div>') +
+      '<div class="field"><label for="s-name">ชื่อ - นามสกุล</label><input id="s-name" name="name" required value="' + esc(S.edit.name != null ? S.edit.name : x ? x.name : '') + '"' + (x ? ' data-autofocus' : '') + '></div>' +
+      '<div class="field"><label for="s-email">อีเมล (ล็อกอินแทนชื่อผู้ใช้ได้)</label><input id="s-email" name="email" type="email" value="' + esc(x ? x.email || '' : '') + '"></div>' +
+      '<div class="field"><label for="s-role">ตำแหน่ง</label><select id="s-role" name="role">' + d.roles.map((r) => '<option value="' + r.id + '"' + (r.id === role ? ' selected' : '') + '>' + esc(r.name) + '</option>').join('') + '</select></div>' +
+      scopeHtml +
+      (x ? '' : '<div class="field"><label for="s-pw">รหัสผ่านชั่วคราว</label><input id="s-pw" name="password" type="text" minlength="8" required autocomplete="off"><span class="hint">พนักงานต้องเปลี่ยนเองตอนเข้าครั้งแรก</span></div>') +
+      (x && x.id !== S.staff.id ? '<label class="check"><input type="checkbox" name="active"' + (x.is_active ? ' checked' : '') + '>เปิดใช้งาน</label>' : '') +
+      errHtml() + '<div class="actions"><button class="btn">' + (x ? 'บันทึก' : 'เพิ่มผู้ใช้') + '</button><button type="button" class="btn ghost" data-a="close">ยกเลิก</button></div></form>';
+  }
+  function staffPwForm(id) {
+    return '<form class="grid" data-f="staffpw" data-v="' + esc(id) + '"><div class="field" style="grid-column:1/-1"><label for="s-pw">รหัสผ่านใหม่ (อย่างน้อย 8 ตัว)</label><input id="s-pw" name="password" type="text" minlength="8" required autocomplete="off" data-autofocus>' +
+      '<span class="hint">' + (id === S.staff.id ? 'ใช้กับบัญชีของคุณเองได้ทันที' : 'เป็นรหัสชั่วคราว พนักงานต้องเปลี่ยนเองตอนเข้าครั้งถัดไป') + '</span></div>' +
+      errHtml() + '<div class="actions"><button class="btn">ตั้งรหัสผ่าน</button><button type="button" class="btn ghost" data-a="close">ยกเลิก</button></div></form>';
+  }
+  function auditView() {
+    const list = S.data.audit || [];
+    return '<div class="card"><h2>ประวัติการแก้ไขล่าสุด</h2>' + (list.length ? '<div class="wrap"><table class="tbl"><thead><tr><th>เวลา</th><th>ผู้ทำ</th><th>รายการ</th><th>รายละเอียด</th></tr></thead><tbody>' +
+      list.map((x) => '<tr><td style="white-space:nowrap">' + date(x.at) + ' ' + new Date(x.at).toTimeString().slice(0, 5) + '</td><td>' + esc(x.actor_name || x.actor_id || x.actor_type) + '</td><td>' + esc(x.action) + '</td><td>' + esc(x.detail || '') + '</td></tr>').join('') + '</tbody></table></div>' : '<p class="muted">ยังไม่มีรายการ</p>') + '</div>';
+  }
+
   function dialog() {
     const e = S.edit; let title = ''; let body = '';
     if (e.kind === 'reward') { const r = e.id === 'new' ? null : S.data.rewards.find((x) => String(x.id) === String(e.id)); title = r ? 'แก้ไขของรางวัล' : 'เพิ่มของรางวัล · ' + brand().name; body = rewardForm(r); }
     if (e.kind === 'welcome') { title = 'คูปองต้อนรับ · ' + brand().name; body = welcomeForm(); }
     if (e.kind === 'code') { title = e.id ? 'แก้ไขโค้ด' : 'สร้างโค้ดคูปอง'; body = codeForm(e.id); }
+    if (e.kind === 'staff') { title = e.id ? 'แก้ไขผู้ใช้ ' + e.id : 'เพิ่มผู้ใช้'; body = staffForm(e.id); }
+    if (e.kind === 'staffpw') { title = 'ตั้งรหัสผ่านใหม่ให้ ' + e.id; body = staffPwForm(e.id); }
     return '<div class="scrim" data-a="close"></div><div class="dialog" role="dialog" aria-modal="true" aria-label="' + esc(title) + '"><h2>' + esc(title) + '</h2>' + body + '</div>';
   }
 
@@ -285,6 +358,10 @@
       if (!confirm('ปิดโค้ด ' + v + ' ทันที? ลูกค้าจะกรอกโค้ดนี้ไม่ได้อีก (คูปองที่รับไปแล้วยังใช้ได้)')) return;
       await api('PATCH', '/api/admin/promo-codes/' + encodeURIComponent(v), { active: false }); S.edit = null; toast('ปิดโค้ดแล้ว'); await load();
     },
+    myPassword: () => passwordView(false),
+    backHome: () => render(),
+    editStaff: (v) => { S.edit = { kind: 'staff', id: v || null }; S.err = ''; render(); },
+    staffPw: (v) => { S.edit = { kind: 'staffpw', id: v }; S.err = ''; render(); },
     member: async (v) => { await openMember(v); render(); window.scrollTo(0, 0); },
     unmember: () => { S.member = null; render(); },
     decide: async (v) => {
@@ -322,6 +399,27 @@
         tiers: { gold: Number(o.gold), platinum: Number(o.platinum) }, promo: { on: o.promoOn, day: Number(o.promoDay), mult: Number(o.promoMult) } });
       S.err = ''; toast('บันทึกกฎแต้มแล้ว'); await load();
     },
+    password: async (o) => {
+      const forced = S.staff.mustChange;
+      if (o.password !== o.confirm) return passwordView(forced, 'รหัสผ่านใหม่สองช่องไม่ตรงกัน');
+      try {
+        const r = await api('POST', '/api/admin/password', { current: o.current, password: o.password });
+        S.staff = r.staff; toast('เปลี่ยนรหัสผ่านแล้ว');
+        if (forced) await enter(); else render();
+      } catch (e) { if (!e.silent) passwordView(forced, e.message); }
+    },
+    staff: async (o, id, el) => {
+      const scopeIds = [...el.querySelectorAll('input[name="scope"]:checked')].map((x) => x.value);
+      const body = { name: o.name, email: o.email, role: o.role, scopeIds, approveLimit: o.approveLimit };
+      if ('active' in o) body.active = o.active;
+      if (id) await api('PATCH', '/api/admin/staff/' + encodeURIComponent(id), body);
+      else await api('POST', '/api/admin/staff', Object.assign(body, { id: o.id, password: o.password }));
+      S.edit = null; toast(id ? 'บันทึกแล้ว' : 'เพิ่มผู้ใช้แล้ว แจ้งชื่อผู้ใช้และรหัสชั่วคราวให้พนักงาน'); await load();
+    },
+    staffpw: async (o, id) => {
+      await api('POST', '/api/admin/staff/' + encodeURIComponent(id) + '/password', { password: o.password });
+      S.edit = null; toast('ตั้งรหัสผ่านแล้ว'); await load();
+    },
     search: async (o) => { S.q = o.q; S.member = null; await load(); },
     adjust: async (o, id) => {
       await api('POST', '/api/admin/point-adjustments', { memberId: id, brand: S.brand, points: o.points, reason: o.reason });
@@ -347,8 +445,18 @@
     const el = e.target.closest('form[data-f]'); if (!el) return;
     e.preventDefault();
     const fn = F[el.dataset.f]; if (!fn) return;
-    if (el.dataset.f === 'login') { fn(form(el)); return; }
-    guard(() => fn(form(el), el.dataset.v), true);
+    if (el.dataset.f === 'login' || el.dataset.f === 'password') { fn(form(el)); return; }
+    guard(() => fn(form(el), el.dataset.v, el), true);
+  });
+  document.addEventListener('change', (e) => {
+    if (e.target.id !== 's-role' || !S.edit) return;
+    const f = e.target.form;
+    S.edit.role = e.target.value; S.edit.scopes = null;
+    const n = f.querySelector('#s-name'); if (n) S.edit.name = n.value;
+    const keep = {}; for (const k of ['s-id', 's-email', 's-pw']) { const x = f.querySelector('#' + k); if (x) keep[k] = x.value; }
+    render();
+    for (const k in keep) { const x = document.getElementById(k); if (x) x.value = keep[k]; }
+    document.getElementById('s-role').focus();
   });
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && S.edit) A.close(); });
 
