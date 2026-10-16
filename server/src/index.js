@@ -6,7 +6,7 @@ import { createRouter, readBody, send, serveStatic, HttpError } from './http.js'
 import { DEV, REQUIRE_OTP } from './util.js';
 import { logApi, kindOf } from './apilog.js';
 import { startWorker, drainOutbox } from './worker.js';
-import { pool } from './db.js';
+import { pool, one } from './db.js';
 import { ensureDefaultAdmin } from './auth.js';
 import liff from './routes/liff.js';
 import pos from './routes/pos.js';
@@ -41,12 +41,22 @@ export function buildServer() {
       if (req.method === 'GET' && (await serveStatic(STATIC_ROOT, path, res))) return;
       return send(res, 404, { error: 'not_found' });
     }
+    // รูปคูปอง: ส่งเป็นไฟล์รูปตรง ๆ (ไม่ใช่ JSON) เปิดสาธารณะเพื่อให้หน้า LIFF โหลดได้ · รูปไม่เปลี่ยนหลังอัปโหลด จึง cache ได้นาน
+    const img = req.method === 'GET' && /^\/api\/public\/coupon-images\/(\d+)$/.exec(path);
+    if (img) {
+      try {
+        const row = await one('SELECT mime, data FROM coupon_images WHERE id = $1', [Number(img[1])]);
+        if (!row) return send(res, 404, { error: 'not_found' });
+        res.writeHead(200, { 'content-type': row.mime, 'cache-control': 'public, max-age=31536000, immutable', 'x-content-type-options': 'nosniff' });
+        return res.end(Buffer.isBuffer(row.data) ? row.data : Buffer.from(String(row.data).replace(/^\\x/, ''), 'hex'));
+      } catch (e) { console.error(e); return send(res, 500, { error: 'error' }); }
+    }
     const m = r.match(req.method, path);
     let body = {}; let raw = Buffer.alloc(0);
     try {
       if (!m) throw new HttpError(404, 'not_found', 'ไม่พบ endpoint');
       if (req.method !== 'GET') {
-        raw = await readBody(req);
+        raw = await readBody(req, path === '/api/admin/coupon-images' ? 4e6 : 1e6);
         if (raw.length) { try { body = JSON.parse(raw.toString('utf8')); } catch { throw new HttpError(400, 'bad_json', 'JSON ไม่ถูกต้อง'); } }
       }
       const [handler, summary] = m.handlers;

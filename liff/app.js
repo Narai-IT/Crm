@@ -120,10 +120,13 @@
     return '<div class="qr-fallback">' + esc(S.qr.token) + '</div>';
   }
   function couponHtml(c, usable) {
-    const show = usable && S.showCode === c.id;
-    return '<div class="coupon' + (usable ? '' : ' off') + '"><div class="tag"><b>' + esc(c.big) + '</b><small>' + esc(c.small) + '</small></div><div class="in"><b>' + esc(c.title) + '</b><small>' + esc(c.cond) + '</small>' +
-      '<small style="color:' + (usable ? 'var(--ai)' : 'var(--muted)') + ';font-weight:600">' + (c.status === 'used' ? 'ใช้แล้ว ' + (c.usedAt ? date(c.usedAt) : '') : c.status === 'expired' ? 'หมดอายุแล้ว' : left(c.expiresAt)) + '</small>' +
-      (usable ? '<button class="btn sm" style="align-self:flex-start;margin-top:6px" data-a="code" data-v="' + c.id + '">' + (show ? 'ซ่อน' : 'ใช้คูปอง') + '</button>' : '') +
+    const notYet = usable && c.validFrom && c.validFrom > Date.now();
+    const show = usable && !notYet && S.showCode === c.id;
+    const head = c.image ? '<img class="cimg" alt="" loading="lazy" src="' + esc(c.image) + '">' : '<div class="tag"><b>' + esc(c.big) + '</b><small>' + esc(c.small) + '</small></div>';
+    return '<div class="coupon' + (usable ? '' : ' off') + (c.image ? ' has-img' : '') + '">' + head + '<div class="in"><b>' + esc(c.title) + '</b>' +
+      (c.desc ? '<small class="desc">' + esc(c.desc) + '</small>' : '') + '<small>' + esc(c.cond) + '</small>' +
+      '<small style="color:' + (usable ? 'var(--ai)' : 'var(--muted)') + ';font-weight:600">' + (c.status === 'used' ? 'ใช้แล้ว ' + (c.usedAt ? date(c.usedAt) : '') : c.status === 'expired' ? 'หมดอายุแล้ว' : notYet ? 'เริ่มใช้ได้ ' + date(c.validFrom) + ' · ' + left(c.expiresAt) : left(c.expiresAt)) + '</small>' +
+      (usable && !notYet ? '<button class="btn sm" style="align-self:flex-start;margin-top:6px" data-a="code" data-v="' + c.id + '">' + (show ? 'ซ่อน' : 'ใช้คูปอง') + '</button>' : '') +
       (show ? '<div class="code"><small>ยื่นรหัสนี้หรือ QR สมาชิกให้พนักงาน</small><br><b>' + esc(c.code) + '</b></div>' : '') + '</div></div>';
   }
 

@@ -23,6 +23,7 @@ export default function (r) {
       m = await one("SELECT * FROM members WHERE status = 'active' AND (id = $1 OR phone = $2)", ['MB-' + digits.slice(-7).padStart(7, '0'), digits.length >= 9 ? digits : '-']);
     }
     if (!m) throw notFound('ไม่พบสมาชิก');
+    await tx((db) => core.autoIssue(db, m.id, t.brandId));
     const w = (await core.walletsOf({ q, one }, m.id));
     const coupons = (await q(COUPON_SQL + " WHERE c.member_id = $1 AND c.status = 'ready' AND c.expires_at > now() AND (c.brand_id = $2 OR c.brand_id IS NULL) ORDER BY c.expires_at", [m.id, t.brandId])).map(couponView);
     return { member: { id: m.id, name: m.full_name, phone: maskPhone(m.phone) }, brand: t.brandId, balance: w[t.brandId].balance, tier: w[t.brandId].tier.name,

@@ -40,7 +40,7 @@ async function seedBase(db) {
   for (const b of BRANCHES) await db.q("INSERT INTO branches (id, brand_id, name, open_time, close_time, pos_mode, phone) VALUES ($1,$2,$3,$4,$5,$6,'0X-XXX-XX' || right($1, 2))", b);
   for (const [brand, [baht, pts, welcome, gold, plat]] of Object.entries(RULES)) {
     await db.q('INSERT INTO earn_rules (brand_id, baht_per_unit, points_per_unit, welcome_points, gold_at, platinum_at, created_by) VALUES ($1,$2,$3,$4,$5,$6,$7)', [brand, baht, pts, welcome, gold, plat, 'seed']);
-    const t = await db.one("INSERT INTO coupon_templates (brand_id, title, badge_big, badge_small, condition_text, discount_type, discount_value, valid_days) VALUES ($1,'ส่วนลด 10% บิลแรก','-10%','บิลแรก','สำหรับสมาชิกใหม่ · 1 ครั้ง','pct',10,30) RETURNING id", [brand]);
+    const t = await db.one("INSERT INTO coupon_templates (brand_id, kind, title, badge_big, badge_small, condition_text, discount_type, discount_value, valid_days) VALUES ($1,'welcome','ส่วนลด 10% บิลแรก','-10%','บิลแรก','สำหรับสมาชิกใหม่ · 1 ครั้ง','pct',10,30) RETURNING id", [brand]);
     await db.q('UPDATE brands SET welcome_template_id = $2 WHERE id = $1', [brand, t.id]);
     await db.q('INSERT INTO line_channels (brand_id) VALUES ($1)', [brand]);
   }
@@ -50,7 +50,7 @@ async function seedBase(db) {
       VALUES ($1,$2,$3,$4,$5,'baht',$6,$7) RETURNING id`, [brand, name, disc ? '-' + value : 'ฟรี', disc ? 'บาท' : 'แลกแต้ม', 'แลกด้วย ' + cost + ' แต้ม' + (min ? ' · ขั้นต่ำ ' + min + ' บาท' : ''), value, min]);
     await db.q('INSERT INTO rewards (brand_id, name, category, points_cost, coupon_template_id, stock) VALUES ($1,$2,$3,$4,$5,$6)', [brand, name, cat, cost, t.id, stock]);
   }
-  const code = await db.one("INSERT INTO coupon_templates (brand_id, title, badge_big, badge_small, condition_text, discount_type, discount_value) VALUES (NULL,'ส่วนลด 15% จากโค้ด','-15%','โค้ดพิเศษ','ใช้ได้ 1 ครั้ง · ทุกแบรนด์','pct',15) RETURNING id");
+  const code = await db.one("INSERT INTO coupon_templates (brand_id, kind, title, badge_big, badge_small, condition_text, discount_type, discount_value) VALUES (NULL,'code','ส่วนลด 15% จากโค้ด','-15%','โค้ดพิเศษ','ใช้ได้ 1 ครั้ง · ทุกแบรนด์','pct',15) RETURNING id");
   await db.q("INSERT INTO promo_codes (code, coupon_template_id, max_uses) VALUES ('NEWMENU', $1, 1000)", [code.id]);
   const pw = hashPassword(process.env.SEED_STAFF_PASSWORD || DEV_PASSWORD);
   for (const [id, name, role, st, sid] of STAFF) {

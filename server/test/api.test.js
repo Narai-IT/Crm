@@ -7,6 +7,7 @@ const TEST_DB = process.env.TEST_DATABASE_URL;
 if (TEST_DB) { process.env.DATABASE_URL = TEST_DB; process.env.DEV_MODE = '1'; process.env.LINE_HUMLAI_SECRET = 'test-secret-humlai'; }
 
 let base; let server; let mods;
+const base_url = () => base;
 const USER = 'Utest000000000000000000000000001';
 async function call(method, path, body, headers = {}) {
   const res = await fetch(base + path, { method, headers: { 'content-type': 'application/json', ...headers }, body: body === undefined ? undefined : JSON.stringify(body) });
@@ -164,7 +165,7 @@ t('Webhook จริง: ต้องมีลายเซ็นถูกต้�
   assert.equal(n.n, 1);
 });
 
-t('หลังบ้าน: แก้ของรางวัล (คูปองที่แลกไปแล้วไม่เปลี่ยน) · คูปองต้อนรับ · โค้ดคูปอง', async () => {
+t('หลังบ้าน: แก้ของรางวัล (คูปองที่แลกไปแล้วไม่เปลี่ยน)', async () => {
   const login = await call('POST', '/api/admin/login', { username: 'S001', password: 'demo1234' });
   const adm = { authorization: 'Bearer ' + login.data.token };
   const add = await call('POST', '/api/admin/rewards', { brand: 'humlai', name: 'ไข่ต้มฟรี', cat: 'side', cost: 30, value: 10, stock: 5 }, adm);
@@ -181,17 +182,6 @@ t('หลังบ้าน: แก้ของรางวัล (คูปอ�
   const mine = (await call('GET', '/api/liff/coupons?brand=humlai', undefined, asUser)).data.find((c) => c.title === 'ไข่ต้มฟรี');
   assert.equal(Number(mine.cp.value), 10);
 
-  assert.equal((await call('PUT', '/api/admin/welcome-coupon/humlai', { type: 'baht', value: 30, min: 100 }, adm)).status, 200);
-  const w = (await call('GET', '/api/admin/coupons', undefined, adm)).data.welcome.find((x) => x.brand_id === 'humlai');
-  assert.equal(Number(w.discount_value), 30);
-  assert.equal(w.title, 'ส่วนลด 30 บาท เมื่อซื้อครบ 100 บาท');
-
-  const pc = await call('POST', '/api/admin/promo-codes', { code: 'hl50', brand: 'humlai', type: 'baht', value: 50, maxUses: 10 }, adm);
-  assert.equal(pc.status, 200, JSON.stringify(pc.data));
-  assert.equal((await call('POST', '/api/liff/coupons/claim', { brand: 'humlai', code: 'HL50' }, asUser)).status, 200);
-  assert.equal((await call('PATCH', '/api/admin/promo-codes/HL50', { active: false }, adm)).status, 200);
-  const u3 = { 'x-dev-line-user': 'Utest000000000000000000000000002' };
-  assert.equal((await call('POST', '/api/liff/coupons/claim', { brand: 'humlai', code: 'HL50' }, u3)).status, 400);
 });
 
 t('ผู้ใช้หลังบ้าน: admin/admin ต้องเปลี่ยนรหัสก่อน · เพิ่มผู้ใช้ตามแบรนด์ · ปิดใช้งาน · ต้องเหลือผู้ดูแลอย่างน้อย 1 คน', async () => {
@@ -224,4 +214,77 @@ t('ผู้ใช้หลังบ้าน: admin/admin ต้องเปล
   for (const id of ['S001']) assert.equal((await call('PATCH', '/api/admin/staff/' + id, { active: false }, adm)).status, 200);
   const list = (await call('GET', '/api/admin/staff', undefined, adm)).data;
   assert.ok(list.roles.find((r) => r.id === 'cashier'));
+});
+
+t('จัดการคูปอง: แจกอัตโนมัติตามเงื่อนไข · จำกัดจำนวน · วันที่ใช้ได้ · โค้ด · ของขวัญ · รูป · ล็อกมูลค่าหลังแจก', async () => {
+  const login = await call('POST', '/api/admin/login', { username: 'S003', password: 'demo1234' });
+  const adm = { authorization: 'Bearer ' + login.data.token };
+  const pos = (b) => call('POST', '/api/pos/transactions', b, posHL01);
+  const today = new Date(Date.now() + 7 * 3600e3);
+  const iso = (d) => d.toISOString().slice(0, 10);
+  const notToday = 127 & ~(1 << today.getUTCDay());
+  const base = { brand: 'humlai', validity: 'days', days: 7, useDays: 127 };
+
+  // รูป: PNG 1x1
+  const png = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
+  const up = await call('POST', '/api/admin/coupon-images', { dataUrl: png, brand: 'humlai' }, adm);
+  assert.equal(up.status, 200, JSON.stringify(up.data));
+  const imgRes = await fetch(base_url() + up.data.url);
+  assert.equal(imgRes.headers.get('content-type'), 'image/png');
+  assert.equal((await call('POST', '/api/admin/coupon-images', { dataUrl: 'data:image/png;base64,' + Buffer.from('<svg>').toString('base64') }, adm)).status, 400);
+
+  // ทั่วไป: แจกอัตโนมัติ 1 ใบ (จำกัด 1 ใบทั้งระบบ) · ใช้ได้ทุกวันยกเว้นวันนี้
+  const g = await call('POST', '/api/admin/coupon-templates', { ...base, kind: 'general', title: 'ลด 20 ทุกเมนู', description: 'ทดสอบ', imageId: up.data.id, type: 'baht', value: 20, maxIssue: 1, useDays: notToday }, adm);
+  assert.equal(g.status, 200, JSON.stringify(g.data));
+  const mine = (await call('GET', '/api/liff/coupons?brand=humlai', undefined, asUser)).data.filter((c) => c.title === 'ลด 20 ทุกเมนู');
+  assert.equal(mine.length, 1);
+  assert.equal(mine[0].image, up.data.url);
+  assert.equal((await call('GET', '/api/liff/coupons?brand=humlai', undefined, asUser)).data.filter((c) => c.title === 'ลด 20 ทุกเมนู').length, 1);
+  const u2 = { 'x-dev-line-user': 'Utest000000000000000000000000002' };
+  assert.equal((await call('GET', '/api/liff/coupons?brand=humlai', undefined, u2)).data.filter((c) => c.title === 'ลด 20 ทุกเมนู').length, 0);
+  const me = (await call('GET', '/api/liff/me', undefined, asUser)).data.member.id;
+  const wrongDay = await pos({ posBillId: 'CP-1', memberId: me, couponIds: [mine[0].id], items: [{ id: 'h1', name: 'ข้าวมันไก่', price: 70, qty: 2 }] });
+  assert.equal(wrongDay.data.error, 'coupon_wrong_day');
+
+  // แจกแล้วเปลี่ยนมูลค่าไม่ได้ แต่แก้คำอธิบายได้
+  assert.equal((await call('PATCH', '/api/admin/coupon-templates/' + g.data.id, { ...base, kind: 'general', title: 'ลด 20 ทุกเมนู', type: 'baht', value: 30, maxIssue: 1, useDays: notToday }, adm)).data.error, 'coupon_locked');
+  assert.equal((await call('PATCH', '/api/admin/coupon-templates/' + g.data.id, { ...base, kind: 'general', title: 'ลด 20 ทุกเมนู!', description: 'แก้แล้ว', type: 'baht', value: 20, maxIssue: 1, useDays: 127 }, adm)).status, 200);
+  const ok = await pos({ posBillId: 'CP-2', memberId: me, couponIds: [mine[0].id], items: [{ id: 'h1', name: 'ข้าวมันไก่', price: 70, qty: 2 }] });
+  assert.equal(ok.data.discount, 20, JSON.stringify(ok.data));
+
+  // ทั่วไปเฉพาะ Platinum: สมาชิกใหม่ไม่ได้
+  await call('POST', '/api/admin/coupon-templates', { ...base, kind: 'general', title: 'เฉพาะแพลทินัม', type: 'pct', value: 10, maxDiscount: 50, tier: 'PLATINUM' }, adm);
+  assert.equal((await call('GET', '/api/liff/coupons?brand=humlai', undefined, u2)).data.some((c) => c.title === 'เฉพาะแพลทินัม'), false);
+
+  // ช่วงวันที่: ยังไม่ถึงวันเริ่ม → ได้คูปองแต่ใช้ไม่ได้
+  const tmr = iso(new Date(today.getTime() + 864e5)); const nextw = iso(new Date(today.getTime() + 7 * 864e5));
+  await call('POST', '/api/admin/coupon-templates', { ...base, kind: 'general', title: 'เริ่มพรุ่งนี้', type: 'free', value: 25, validity: 'dates', validFrom: tmr, validTo: nextw }, adm);
+  const fut = (await call('GET', '/api/liff/coupons?brand=humlai', undefined, u2)).data.find((c) => c.title === 'เริ่มพรุ่งนี้');
+  assert.equal(fut.big, 'ฟรี');
+  assert.ok(Math.abs(fut.expiresAt - new Date(nextw + 'T23:59:59+07:00')) < 1000);
+  const u2id = (await call('GET', '/api/liff/me', undefined, u2)).data.member.id;
+  assert.equal((await pos({ posBillId: 'CP-3', memberId: u2id, couponIds: [fut.id], items: [{ id: 'h6', name: 'น้ำ', price: 25, qty: 1 }] })).data.error, 'coupon_not_started');
+
+  // หมดช่วงแจก → ไม่แจก
+  const yday = iso(new Date(today.getTime() - 864e5));
+  await call('POST', '/api/admin/coupon-templates', { ...base, kind: 'general', title: 'หมดช่วงแจก', type: 'baht', value: 5, issueFrom: yday, issueTo: yday }, adm);
+  assert.equal((await call('GET', '/api/liff/coupons?brand=humlai', undefined, u2)).data.some((c) => c.title === 'หมดช่วงแจก'), false);
+
+  // โค้ด: กรอกได้ครั้งเดียว · ปิดคูปองแล้วโค้ดใช้ไม่ได้
+  const cc = await call('POST', '/api/admin/coupon-templates', { ...base, kind: 'code', code: 'hlsummer', title: 'โค้ดหน้าร้อน', type: 'baht', value: 15 }, adm);
+  assert.equal(cc.status, 200, JSON.stringify(cc.data));
+  assert.equal((await call('POST', '/api/liff/coupons/claim', { brand: 'humlai', code: 'HLSUMMER' }, asUser)).status, 200);
+  assert.equal((await call('POST', '/api/liff/coupons/claim', { brand: 'humlai', code: 'HLSUMMER' }, asUser)).status, 409);
+  assert.equal((await call('PATCH', '/api/admin/coupon-templates/' + cc.data.id, { active: false }, adm)).status, 200);
+  assert.equal((await call('POST', '/api/liff/coupons/claim', { brand: 'humlai', code: 'HLSUMMER' }, u2)).status, 400);
+
+  // ของขวัญ: พนักงานมอบให้รายคน
+  const gift = await call('POST', '/api/admin/coupon-templates', { ...base, kind: 'gift', title: 'ขอโทษที่รอนาน', type: 'free', value: 40 }, adm);
+  const gv = await call('POST', '/api/admin/members/' + u2id + '/coupons', { templateId: gift.data.id }, adm);
+  assert.equal(gv.status, 200, JSON.stringify(gv.data));
+  assert.ok((await call('GET', '/api/liff/coupons?brand=humlai', undefined, u2)).data.some((c) => c.title === 'ขอโทษที่รอนาน'));
+
+  const list = (await call('GET', '/api/admin/coupon-templates?brand=humlai', undefined, adm)).data;
+  assert.equal(list.find((x) => x.id === g.data.id).used, 1);
+  assert.ok(list.some((x) => x.kind === 'welcome'));
 });

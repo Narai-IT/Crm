@@ -77,5 +77,9 @@ export function tierOf(rule, earned12m) {
 }
 export function couponDiscount(c, subtotal) {
   if (!c || c.status !== 'ready' || subtotal < Number(c.min_spend || 0)) return 0;
-  return c.discount_type === 'pct' ? Math.floor(subtotal * Number(c.discount_value) / 100) : Math.min(Number(c.discount_value), subtotal);
+  if (c.discount_type === 'pct') {
+    const d = Math.floor(subtotal * Number(c.discount_value) / 100);
+    return c.max_discount ? Math.min(d, Number(c.max_discount)) : d;
+  }
+  return Math.min(Number(c.discount_value), subtotal);
 }

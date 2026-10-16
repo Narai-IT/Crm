@@ -107,15 +107,64 @@ export async function issueCoupon(db, { memberId, templateId, source, sourceRef 
     const ex = await db.one('SELECT * FROM member_coupons WHERE member_id = $1 AND source = $2 AND source_ref = $3', [memberId, source, String(sourceRef)]);
     if (ex) return ex;
   }
+  // จำกัดจำนวนใบทั้งหมด: ล็อกแม่แบบไว้ระหว่างนับ กันแจกเกินเมื่อมีคนรับพร้อมกัน
+  if (t.max_issue) {
+    await db.q('SELECT id FROM coupon_templates WHERE id = $1 FOR UPDATE', [t.id]);
+    const n = await db.one('SELECT count(*)::int AS n FROM member_coupons WHERE template_id = $1', [t.id]);
+    if (n.n >= t.max_issue) throw conflict('coupon_sold_out', 'คูปองนี้ถูกแจกครบจำนวนแล้ว');
+  }
+  // วันหมดอายุ: แบบช่วงวันที่ = วันสุดท้ายของช่วง · แบบระยะเวลา = นับจากวันที่ได้รับ (ไม่เกินวันสุดท้ายถ้ามี)
+  const byDays = new Date(Date.now() + t.valid_days * 864e5);
+  const expires = t.validity === 'dates' && t.valid_to ? t.valid_to : (t.valid_to && t.valid_to < byDays ? t.valid_to : byDays);
   for (let i = 0; i < 6; i++) {
     const code = (t.code_prefix || 'GR') + '-' + randomCode(4 + (i > 3 ? 2 : 0));
     const row = await db.one(
       `INSERT INTO member_coupons (code, template_id, member_id, brand_id, source, source_ref, expires_at)
-       VALUES ($1,$2,$3,$4,$5,$6, now() + make_interval(days => $7::int)) ON CONFLICT (code) DO NOTHING RETURNING *`,
-      [code, templateId, memberId, t.brand_id, source, sourceRef ? String(sourceRef) : null, t.valid_days]);
+       VALUES ($1,$2,$3,$4,$5,$6,$7) ON CONFLICT (code) DO NOTHING RETURNING *`,
+      [code, templateId, memberId, t.brand_id, source, sourceRef ? String(sourceRef) : null, expires]);
     if (row) return row;
   }
   throw new Error('could not allocate coupon code');
+}
+
+// คูปองที่อยู่ในช่วงแจก (ยังไม่หมดเขตใช้) ของแบรนด์
+const OPEN_TPL = `t.is_active AND (t.issue_from IS NULL OR t.issue_from <= now()) AND (t.issue_to IS NULL OR t.issue_to >= now())
+  AND (t.valid_to IS NULL OR t.valid_to > now())`;
+
+// แจกคูปองอัตโนมัติ (ประเภททั่วไป/วันเกิด) ให้สมาชิกที่ตรงเงื่อนไข · เรียกตอนลูกค้าเปิดหน้าสมาชิก และตอน POS สแกน
+// จึงครอบคลุมทั้งสมาชิกเดิมและสมาชิกใหม่ โดยไม่ต้องไล่แจกทั้งฐานล่วงหน้า · แจกซ้ำไม่ได้ (unique member+source+ref)
+export async function autoIssue(db, memberId, brandId) {
+  const tpls = await db.q(`SELECT t.* FROM coupon_templates t WHERE t.brand_id = $1 AND t.kind IN ('general','birthday') AND ${OPEN_TPL}
+    AND NOT EXISTS (SELECT 1 FROM member_coupons c WHERE c.member_id = $2 AND c.template_id = t.id
+      AND (t.kind = 'general' OR c.issued_at > date_trunc('year', now() AT TIME ZONE 'Asia/Bangkok') AT TIME ZONE 'Asia/Bangkok'))`, [brandId, memberId]);
+  if (!tpls.length) return [];
+  const m = await db.one(`SELECT m.birth_date, extract(month FROM m.birth_date)::int AS bmonth, extract(month FROM now() AT TIME ZONE 'Asia/Bangkok')::int AS nmonth,
+      extract(year FROM now() AT TIME ZONE 'Asia/Bangkok')::int AS nyear, COALESCE(l.follow_status, '') AS follow
+    FROM members m LEFT JOIN member_brand_links l ON l.member_id = m.id AND l.brand_id = $2 WHERE m.id = $1 AND m.status = 'active'`, [memberId, brandId]);
+  if (!m) return [];
+  let tier = null;
+  const out = [];
+  for (const t of tpls) {
+    if (t.followers_only && m.follow !== 'follow') continue;
+    if (t.kind === 'birthday' && (!m.birth_date || m.bmonth !== m.nmonth)) continue;
+    if (t.audience_tier !== 'all') {
+      if (!tier) tier = (await walletsOf(db, memberId))[brandId].tier.name;
+      if (tier !== t.audience_tier) continue;
+    }
+    try {
+      out.push(await issueCoupon(db, { memberId, templateId: t.id, source: t.kind === 'birthday' ? 'birthday' : 'auto', sourceRef: t.kind === 'birthday' ? t.id + ':' + m.nyear : String(t.id) }));
+    } catch (e) { if (e.code !== 'coupon_sold_out') throw e; }
+  }
+  return out;
+}
+
+// พนักงานมอบคูปองให้สมาชิกรายคน (ประเภทของขวัญ หรือคูปองอื่นที่ยังเปิดอยู่)
+export async function giftCoupon(db, { memberId, templateId, by }) {
+  const t = await db.one(`SELECT t.* FROM coupon_templates t WHERE t.id = $1 AND t.kind <> 'internal' AND ${OPEN_TPL}`, [templateId]);
+  if (!t) throw bad('coupon_closed', 'คูปองนี้ปิดอยู่หรือหมดช่วงแจกแล้ว');
+  const c = await issueCoupon(db, { memberId, templateId, source: 'gift', sourceRef: 'gift:' + by.id + ':' + Date.now() });
+  await audit(db, { type: 'staff', id: by.id, name: by.name }, 'gift_coupon', { type: 'member', id: memberId }, 'มอบคูปอง ' + t.title);
+  return c;
 }
 
 export async function expireCoupons(db) {
@@ -189,9 +238,15 @@ export async function register(db, f) {
     welcomePts = rule.welcome_points;
     await credit(db, { memberId: id, brandId: f.brandId, branchId: home?.id, type: 'welcome', points: welcomePts, key: 'welcome:' + id + ':' + f.brandId, note: 'แต้มต้อนรับสมาชิกใหม่', actorType: 'system' });
   }
-  let coupon = null;
-  if (brand.welcome_template_id) coupon = await issueCoupon(db, { memberId: id, templateId: brand.welcome_template_id, source: 'welcome', sourceRef: f.brandId });
-  await queueMessage(db, { brandId: f.brandId, lineUserId: f.lineUserId, kind: 'welcome', data: { memberId: id, pts: welcomePts, coupon: coupon ? (await db.one('SELECT title FROM coupon_templates WHERE id = $1', [coupon.template_id])).title : null } });
+  // คูปองต้อนรับ: ทุกใบประเภท "ต้อนรับ" ของแบรนด์ที่ยังอยู่ในช่วงแจก
+  let coupon = null; const titles = [];
+  for (const t of await db.q(`SELECT t.* FROM coupon_templates t WHERE t.brand_id = $1 AND t.kind = 'welcome' AND ${OPEN_TPL} ORDER BY t.id`, [f.brandId])) {
+    try {
+      const c = await issueCoupon(db, { memberId: id, templateId: t.id, source: 'welcome', sourceRef: f.brandId + ':' + t.id });
+      coupon = coupon || c; titles.push(t.title);
+    } catch (e) { if (e.code !== 'coupon_sold_out') throw e; }
+  }
+  await queueMessage(db, { brandId: f.brandId, lineUserId: f.lineUserId, kind: 'welcome', data: { memberId: id, pts: welcomePts, coupon: titles.length ? titles.join(', ') : null } });
   await audit(db, { type: 'member', id }, 'register', { type: 'member', id }, 'สมัครผ่าน OA ' + brand.short_name);
   return { member: m, linked: false, welcomePoints: welcomePts, coupon };
 }
@@ -218,6 +273,8 @@ export async function redeem(db, { memberId, rewardId, key }) {
 export async function claimCode(db, { memberId, brandId, code }) {
   const p = await db.one('SELECT * FROM promo_codes WHERE code = $1 FOR UPDATE', [String(code || '').trim().toUpperCase()]);
   if (!p || (p.expires_at && p.expires_at < new Date()) || (p.brand_id && p.brand_id !== brandId)) throw bad('code_invalid', 'โค้ดไม่ถูกต้องหรือใช้กับแบรนด์นี้ไม่ได้');
+  const open = await db.one(`SELECT 1 FROM coupon_templates t WHERE t.id = $1 AND ${OPEN_TPL}`, [p.coupon_template_id]);
+  if (!open) throw bad('code_invalid', 'โค้ดนี้หมดเขตหรือปิดใช้งานแล้ว');
   if (p.max_uses !== null && p.used_count >= p.max_uses) throw conflict('code_used_up', 'โค้ดนี้ถูกใช้ครบแล้ว');
   const before = await db.one("SELECT id FROM member_coupons WHERE member_id = $1 AND source = 'code' AND source_ref = $2", [memberId, p.code]);
   if (before) throw conflict('code_already_claimed', 'คุณเพิ่มโค้ดนี้ไปแล้ว');
@@ -248,12 +305,15 @@ export async function recordSale(db, s) {
   const ids = (s.couponIds || []).map((x) => parseInt(String(x).replace(/\D/g, ''), 10)).filter(Number.isFinite);
   if (ids.length) {
     if (!member) throw bad('coupon_needs_member', 'ต้องระบุสมาชิกก่อนใช้คูปอง');
-    const cs = await db.q(`SELECT c.*, t.discount_type, t.discount_value, t.min_spend, t.title FROM member_coupons c JOIN coupon_templates t ON t.id = c.template_id
+    const dow = (await db.one("SELECT extract(dow FROM now() AT TIME ZONE 'Asia/Bangkok')::int AS d")).d;
+    const cs = await db.q(`SELECT c.*, t.discount_type, t.discount_value, t.min_spend, t.max_discount, t.title, t.valid_from, t.use_days FROM member_coupons c JOIN coupon_templates t ON t.id = c.template_id
                            WHERE c.id = ANY($1::bigint[]) ORDER BY c.id FOR UPDATE OF c`, [ids]);
     for (const c of cs) {
       if (c.member_id !== member.id) throw bad('coupon_not_owner', 'คูปอง ' + c.code + ' ไม่ใช่ของสมาชิกนี้');
       if (c.status !== 'ready' || c.expires_at < new Date()) throw conflict('coupon_unusable', 'คูปอง ' + c.code + ' ใช้แล้วหรือหมดอายุ');
       if (c.brand_id && c.brand_id !== br.brand_id) throw bad('coupon_wrong_brand', 'คูปอง ' + c.code + ' ใช้กับแบรนด์นี้ไม่ได้');
+      if (c.valid_from && c.valid_from > new Date()) throw bad('coupon_not_started', 'คูปอง ' + c.code + ' ยังไม่ถึงวันที่ใช้ได้');
+      if (!(c.use_days & (1 << dow))) throw bad('coupon_wrong_day', 'คูปอง ' + c.code + ' ใช้วันนี้ไม่ได้');
       const d = couponDiscount(c, subtotal - discount);
       if (d <= 0) throw bad('coupon_min_spend', 'ยอดยังไม่ถึงขั้นต่ำของคูปอง ' + c.code);
       discount += d; used.push(c);

@@ -105,7 +105,7 @@
     const b = S.brand; const d = S.data;
     if (S.page === 'dash') d.dash = await api('GET', '/api/admin/dashboard?brand=' + b);
     if (S.page === 'rewards') d.rewards = await api('GET', '/api/admin/rewards');
-    if (S.page === 'coupons') d.coupons = await api('GET', '/api/admin/coupons');
+    if (S.page === 'coupons') d.coupons = await api('GET', '/api/admin/coupon-templates?brand=' + b);
     if (S.page === 'rules') d.rules = await api('GET', '/api/admin/earn-rules');
     if (S.page === 'members') { d.members = await api('GET', '/api/admin/members?brand=' + b + '&q=' + encodeURIComponent(S.q)); if (S.member) await openMember(S.member.member.id); }
     if (S.page === 'approvals') d.approvals = await api('GET', '/api/admin/point-adjustments');
@@ -114,7 +114,12 @@
     if (S.page === 'audit') d.audit = await api('GET', '/api/admin/audit-logs');
     render();
   }
-  async function openMember(id) { S.member = await api('GET', '/api/admin/members/' + encodeURIComponent(id)); }
+  async function openMember(id) {
+    const [m, tpls] = await Promise.all([api('GET', '/api/admin/members/' + encodeURIComponent(id)), can('rewards') ? api('GET', '/api/admin/coupon-templates?brand=' + S.brand) : Promise.resolve([])]);
+    S.member = m;
+    // คูปองที่มอบได้: ยังเปิด และอยู่ในช่วงแจก (ของขวัญขึ้นก่อน)
+    S.giftable = tpls.filter((t) => couponState(t)[0] === 'เปิดใช้งาน' && t.brand_id === S.brand).sort((a, b) => (a.kind === 'gift' ? 0 : 1) - (b.kind === 'gift' ? 0 : 1));
+  }
 
   /* ---------- หน้าจอ ---------- */
   function render() {
@@ -128,6 +133,7 @@
       (NO_BRAND.includes(S.page) ? '' : S.brands.length > 1 ? '<div class="bpick" role="group" aria-label="เลือกแบรนด์">' + S.brands.map((b) => '<button data-a="brand" data-v="' + b.id + '" aria-pressed="' + (b.id === S.brand) + '">' + esc(b.short_name) + '</button>').join('') + '</div>' : '<b>' + esc(brand().name) + '</b>') +
       '</div>' + views[S.page]() + '</main></div>' + (S.edit ? dialog() : '');
     const auto = document.querySelector('[data-autofocus]'); if (auto) auto.focus();
+    const cf = document.querySelector('form[data-f="coupon"]'); if (cf) syncCoupon(cf);
   }
 
   function dashView() {
@@ -169,50 +175,137 @@
       '<div class="actions"><button class="btn">' + (isNew ? 'เพิ่มของรางวัล' : 'บันทึก') + '</button><button type="button" class="btn ghost" data-a="close">ยกเลิก</button></div></form>';
   }
 
+  const KINDS = [
+    ['general', 'ทั่วไป', 'แจกให้สมาชิกเดิมและสมาชิกใหม่ที่ตรงเงื่อนไขโดยอัตโนมัติ (ได้ตอนเปิดหน้าสมาชิกหรือตอนพนักงานสแกน QR)'],
+    ['code', 'กรอกโค้ด', 'ลูกค้าได้คูปองเมื่อกรอกโค้ดในหน้าสมาชิก เมนู "คูปอง" (คนละ 1 ครั้ง)'],
+    ['birthday', 'วันเกิด', 'แจกอัตโนมัติในเดือนเกิดของสมาชิก ปีละ 1 ครั้ง'],
+    ['welcome', 'ต้อนรับ', 'แจกทันทีเมื่อสมัครสมาชิกผ่าน OA ของแบรนด์นี้'],
+    ['gift', 'ของขวัญ', 'พนักงานมอบให้รายคนจากเมนู "สมาชิก" เช่น ชดเชยลูกค้า หรือรางวัลพิเศษ']
+  ];
+  const KIND_NAME = Object.fromEntries(KINDS.map((k) => [k[0], k[1]]));
+  const TIER_NAME = { all: 'ทุกระดับ', SILVER: 'Silver', GOLD: 'Gold', PLATINUM: 'Platinum' };
+  const DAY_SHORT = ['อา', 'จ', 'อ', 'พ', 'พฤ', 'ศ', 'ส'];
+  const daysText = (mask) => (mask === 127 ? 'ทุกวัน' : DAY_SHORT.filter((_, i) => mask & (1 << i)).join(' '));
+  const couponStyle = (t) => (t.badge_big === 'ฟรี' ? 'free' : t.discount_type);
+  const valueText = (t) => (couponStyle(t) === 'free' ? 'ของฟรี (มูลค่า ' + fmt(t.discount_value) + ' บาท)' : disc(t.discount_type, t.discount_value) + (t.max_discount ? ' สูงสุด ' + fmt(t.max_discount) + ' บาท' : ''));
+  function couponState(t) {
+    const now = Date.now();
+    if (!t.is_active) return ['ปิด', 'pill off'];
+    if (t.valid_to && new Date(t.valid_to) < now) return ['หมดอายุ', 'pill off'];
+    if (t.issue_to && new Date(t.issue_to) < now) return ['หมดช่วงแจก', 'pill off'];
+    if (t.max_issue && t.issued >= t.max_issue) return ['แจกครบแล้ว', 'pill warn'];
+    if (t.issue_from && new Date(t.issue_from) > now) return ['รอเริ่มแจก', 'pill warn'];
+    return ['เปิดใช้งาน', 'pill'];
+  }
   function couponsView() {
-    const c = S.data.coupons; if (!c) return '';
-    const w = c.welcome.find((x) => x.brand_id === S.brand) || {};
-    const codes = c.codes.filter((x) => x.brand_id === S.brand || x.brand_id === null);
-    const live = (x) => (!x.expires_at || new Date(x.expires_at) > new Date()) && (x.max_uses === null || x.used_count < x.max_uses);
-    return '<div class="card"><div class="hd"><h2>คูปองต้อนรับสมาชิกใหม่</h2><button class="btn ghost" data-a="editWelcome">แก้ไข</button></div>' +
-      (w.template_id ? '<p style="margin:0"><b>' + esc(w.title) + '</b><br><span class="muted">ลด ' + disc(w.discount_type, w.discount_value) + (Number(w.min_spend) ? ' · ซื้อครบ ' + fmt(w.min_spend) + ' บาท' : '') + ' · ใช้ได้ ' + w.valid_days + ' วันหลังสมัคร</span></p>' : '<p class="muted" style="margin:0">ปิดอยู่ (สมัครแล้วได้แต่แต้มต้อนรับ)</p>') +
-      '<small class="muted">แต้มต้อนรับตั้งที่เมนู "กฎแต้ม"</small></div>' +
-      '<div class="card"><div class="hd"><h2>โค้ดคูปอง</h2><button class="btn" data-a="editCode">+ สร้างโค้ด</button></div><small class="muted">ลูกค้ากรอกโค้ดในหน้าสมาชิก เมนู "คูปอง" แล้วได้คูปองเข้ากระเป๋า (คนละ 1 ครั้งต่อโค้ด)</small>' +
-      (codes.length ? '<div class="wrap"><table class="tbl"><thead><tr><th>โค้ด</th><th>คูปองที่ได้</th><th>ใช้ที่</th><th class="r">ใช้ไป / สูงสุด</th><th>หมดเขต</th><th>สถานะ</th><th></th></tr></thead><tbody>' +
-        codes.map((x) => '<tr class="' + (live(x) ? '' : 'off') + '"><td><b>' + esc(x.code) + '</b></td><td>' + esc(x.title) + '<br><small class="muted">ลด ' + disc(x.discount_type, x.discount_value) + (Number(x.min_spend) ? ' · ขั้นต่ำ ' + fmt(x.min_spend) : '') + ' · ' + x.valid_days + ' วัน</small></td>' +
-          '<td>' + esc(brandName(x.brand_id)) + '</td><td class="r num">' + fmt(x.used_count) + ' / ' + (x.max_uses === null ? 'ไม่จำกัด' : fmt(x.max_uses)) + '</td><td>' + (x.expires_at ? date(x.expires_at) : 'ไม่มี') + '</td>' +
-          '<td>' + (live(x) ? '<span class="pill">ใช้ได้</span>' : '<span class="pill off">ปิด</span>') + '</td><td class="r">' +
-          (x.brand_id || S.staff.role === 'super' ? '<button class="btn ghost sm" data-a="editCode" data-v="' + esc(x.code) + '">แก้ไข</button>' : '') + '</td></tr>').join('') + '</tbody></table></div>'
-        : '<p class="muted">ยังไม่มีโค้ด</p>') + '</div>';
+    const all = (S.data.coupons || []).filter((t) => t.brand_id === S.brand || t.brand_id === null);
+    const f = S.cfilter || 'all';
+    const list = all.filter((t) => f === 'all' || t.kind === f);
+    return '<div class="card"><div class="hd"><h2>คูปอง ' + esc(brand().name) + '</h2><button class="btn" data-a="editCoupon">+ สร้างคูปอง</button></div>' +
+      '<div class="bpick" role="group" aria-label="กรองประเภท">' + [['all', 'ทั้งหมด']].concat(KINDS).map((k) => '<button data-a="cfilter" data-v="' + k[0] + '" aria-pressed="' + (f === k[0]) + '">' + k[1] + ' <span class="num">(' + all.filter((t) => k[0] === 'all' || t.kind === k[0]).length + ')</span></button>').join('') + '</div>' +
+      (list.length ? '<div class="wrap"><table class="tbl"><thead><tr><th></th><th>คูปอง</th><th>ประเภท</th><th>ส่วนลด</th><th>ใช้ได้</th><th class="r">แจก / ใช้แล้ว</th><th>สถานะ</th><th></th></tr></thead><tbody>' +
+        list.map((t) => {
+          const st = couponState(t);
+          return '<tr class="' + (st[1] === 'pill' ? '' : 'off') + '"><td>' + (t.image_id ? '<img class="thumb" alt="" src="/api/public/coupon-images/' + t.image_id + '">' : '<span class="thumb badge">' + esc(t.badge_big) + '</span>') + '</td>' +
+            '<td><b>' + esc(t.title) + '</b>' + (t.code ? '<br><small>โค้ด <b>' + esc(t.code) + '</b></small>' : '') + (t.brand_id ? '' : '<br><small class="muted">ทุกแบรนด์</small>') + '</td>' +
+            '<td>' + esc(KIND_NAME[t.kind] || t.kind) + (t.audience_tier !== 'all' ? '<br><small class="muted">' + TIER_NAME[t.audience_tier] + '</small>' : '') + '</td>' +
+            '<td>' + esc(valueText(t)) + (Number(t.min_spend) ? '<br><small class="muted">ขั้นต่ำ ' + fmt(t.min_spend) + ' บาท</small>' : '') + '</td>' +
+            '<td><small>' + (t.validity === 'dates' ? date(t.valid_from) + ' - ' + date(t.valid_to) : t.valid_days + ' วันหลังได้รับ') + '<br>' + daysText(t.use_days) + '</small></td>' +
+            '<td class="r num">' + fmt(t.issued) + (t.max_issue ? ' / ' + fmt(t.max_issue) : '') + '<br><small class="muted">ใช้แล้ว ' + fmt(t.used) + '</small></td>' +
+            '<td><span class="' + st[1] + '">' + st[0] + '</span></td>' +
+            '<td class="r" style="white-space:nowrap">' + (t.brand_id || S.staff.role === 'super' ? '<button class="btn ghost sm" data-a="editCoupon" data-v="' + t.id + '">แก้ไข</button> <button class="btn ghost sm" data-a="toggleCoupon" data-v="' + t.id + '">' + (t.is_active ? 'ปิด' : 'เปิด') + '</button>' : '') + '</td></tr>';
+        }).join('') + '</tbody></table></div>' : '<p class="muted">ยังไม่มีคูปองประเภทนี้</p>') + '</div>';
   }
-  function discountFields(x, withTitle) {
-    return (withTitle ? '<div class="field" style="grid-column:1/-1"><label for="f-title">ชื่อคูปอง</label><input id="f-title" name="title" value="' + esc(x.title || '') + '" placeholder="เว้นว่าง = ตั้งชื่อให้อัตโนมัติ"></div>' : '') +
-      '<div class="field"><label for="f-type">แบบส่วนลด</label><select id="f-type" name="type"><option value="baht"' + (x.discount_type !== 'pct' ? ' selected' : '') + '>ลดเป็นบาท</option><option value="pct"' + (x.discount_type === 'pct' ? ' selected' : '') + '>ลดเป็น %</option></select></div>' +
-      '<div class="field"><label for="f-val">มูลค่าส่วนลด</label><input id="f-val" name="value" type="number" min="1" step="0.01" value="' + esc(Number(x.discount_value) || '') + '" required></div>' +
-      '<div class="field"><label for="f-min">ยอดซื้อขั้นต่ำ (บาท)</label><input id="f-min" name="min" type="number" min="0" value="' + esc(Number(x.min_spend) || 0) + '"></div>' +
-      '<div class="field"><label for="f-days">ใช้ได้ (วัน)</label><input id="f-days" name="days" type="number" min="1" max="365" value="' + esc(x.valid_days || 30) + '"></div>';
+  function couponForm(id) {
+    const t = id ? S.data.coupons.find((x) => String(x.id) === String(id)) : null;
+    const x = t || { kind: 'general', title: '', description: '', discount_type: 'baht', badge_big: '', discount_value: '', min_spend: 0, max_discount: null, validity: 'days', valid_days: 30, valid_from: null, valid_to: null,
+      issue_from: null, issue_to: null, audience_tier: 'all', followers_only: false, use_days: 127, max_issue: null, is_active: true, code: '', issued: 0 };
+    const style = t ? couponStyle(t) : 'baht'; const locked = t && t.issued > 0;
+    const lockAttr = locked ? ' disabled' : '';
+    const radio = (name, val, cur, label, extra) => '<label class="check"><input type="radio" name="' + name + '" value="' + val + '"' + (String(cur) === String(val) ? ' checked' : '') + (extra || '') + '>' + label + '</label>';
+    return '<form class="coupon-ed" data-f="coupon" data-v="' + (id || '') + '"><div class="ed-form">' +
+      (locked ? '<div class="note">แจกไปแล้ว ' + fmt(t.issued) + ' ใบ จึงเปลี่ยนประเภท มูลค่าส่วนลด และโค้ดไม่ได้ (คูปองที่ลูกค้าถืออยู่ต้องไม่เปลี่ยน) ถ้าจะเปลี่ยนให้ปิดใบนี้แล้วสร้างใหม่</div>' : '') +
+      '<fieldset class="field"><legend>ประเภท</legend><div class="segr">' + KINDS.map((k) => '<label><input type="radio" name="kind" value="' + k[0] + '"' + (x.kind === k[0] ? ' checked' : '') + lockAttr + '><span>' + k[1] + '</span></label>').join('') + '</div><span class="hint" id="kind-hint"></span></fieldset>' +
+      '<div class="field"><label for="c-title">ชื่อคูปอง</label><input id="c-title" name="title" maxlength="60" required value="' + esc(x.title) + '" data-autofocus></div>' +
+      '<div class="field"><label for="c-desc">รายละเอียด</label><textarea id="c-desc" name="description" maxlength="1000" placeholder="เช่น ใช้ได้กับเมนูข้าวมันไก่ทุกจาน ไม่ร่วมกับโปรโมชั่นอื่น">' + esc(x.description) + '</textarea></div>' +
+      '<div class="field"><span class="lbl">รูปคูปอง</span><div class="upl"><div class="upl-img" id="c-img">' + (S.edit.imageUrl ? '<img alt="" src="' + esc(S.edit.imageUrl) + '">' : '<span>ยังไม่มีรูป</span>') + '</div>' +
+        '<div class="upl-side"><label class="btn ghost sm" for="c-file">เลือกรูป</label><input id="c-file" type="file" accept="image/png,image/jpeg,image/gif,image/webp" class="sr">' + (S.edit.imageUrl ? '<button type="button" class="btn ghost sm" data-a="dropImage">ลบรูป</button>' : '') +
+        '<span class="hint">แนะนำ 810 × 270 px (3:1) · PNG, JPG, GIF · ไม่เกิน 2 MB · ระบบย่อรูปให้อัตโนมัติ</span></div></div></div>' +
+      '<div class="grid">' +
+        '<div class="field"><label for="c-type">ส่วนลด</label><select id="c-type" name="type"' + lockAttr + '><option value="baht"' + (style === 'baht' ? ' selected' : '') + '>ลดเป็นบาท</option><option value="pct"' + (style === 'pct' ? ' selected' : '') + '>ลดเป็น %</option><option value="free"' + (style === 'free' ? ' selected' : '') + '>ของฟรี</option></select></div>' +
+        '<div class="field"><label for="c-val" id="c-val-l">มูลค่า</label><input id="c-val" name="value" type="number" min="1" step="0.01" required value="' + esc(Number(x.discount_value) || '') + '"' + lockAttr + '></div>' +
+        '<div class="field" data-show="pct"><label for="c-max">ลดสูงสุด (บาท)</label><input id="c-max" name="maxDiscount" type="number" min="0" placeholder="ไม่จำกัด" value="' + esc(x.max_discount ? Number(x.max_discount) : '') + '"' + lockAttr + '></div>' +
+        '<div class="field"><label for="c-min">ยอดซื้อขั้นต่ำ (บาท)</label><input id="c-min" name="min" type="number" min="0" value="' + esc(Number(x.min_spend) || 0) + '"' + lockAttr + '></div>' +
+        '<div class="field" data-show="code"><label for="c-code">โค้ดที่ลูกค้ากรอก</label><input id="c-code" name="code" maxlength="20" autocapitalize="characters" placeholder="เช่น HUMLAI50" value="' + esc(x.code || '') + '"' + lockAttr + '></div>' +
+      '</div>' +
+      '<fieldset class="field"><legend>วันที่ใช้ได้</legend><div class="row-in">' + radio('validity', 'dates', x.validity, 'ตามวันที่') + radio('validity', 'days', x.validity, 'ตามระยะเวลาหลังได้รับ') + '</div>' +
+        '<div class="row-in" data-show="dates"><input type="date" name="validFrom" aria-label="วันเริ่มใช้" value="' + isoDay(x.valid_from) + '"> ถึง <input type="date" name="validTo" aria-label="วันสุดท้ายที่ใช้" value="' + isoDay(x.valid_to) + '"></div>' +
+        '<div class="row-in" data-show="days"><input type="number" name="days" min="1" max="365" style="width:90px" aria-label="จำนวนวัน" value="' + esc(x.valid_days || 30) + '"> วัน นับจากวันที่ลูกค้าได้รับคูปอง</div></fieldset>' +
+      '<details class="adv"' + (t && (t.issue_from || t.issue_to || t.audience_tier !== 'all' || t.followers_only || t.use_days !== 127 || t.max_issue) ? ' open' : '') + '><summary>ขั้นสูง</summary>' +
+        '<div class="field"><span class="lbl">ช่วงวันที่แจก</span><div class="row-in"><input type="date" name="issueFrom" aria-label="เริ่มแจก" value="' + isoDay(x.issue_from) + '"> ถึง <input type="date" name="issueTo" aria-label="สิ้นสุดการแจก" value="' + isoDay(x.issue_to) + '"></div><span class="hint">เว้นว่าง = แจกตั้งแต่บันทึกจนกว่าจะปิดคูปอง</span></div>' +
+        '<div class="grid"><div class="field"><label for="c-tier">ส่งให้ระดับ</label><select id="c-tier" name="tier">' + Object.entries(TIER_NAME).map(([k, v]) => '<option value="' + k + '"' + (x.audience_tier === k ? ' selected' : '') + '>' + v + '</option>').join('') + '</select></div>' +
+          '<div class="field"><label for="c-fol">และ</label><select id="c-fol" name="followersOnly"><option value="">สมาชิกทุกคน</option><option value="1"' + (x.followers_only ? ' selected' : '') + '>เฉพาะคนที่ยังเป็นเพื่อนกับ OA</option></select></div></div>' +
+        '<fieldset class="field"><legend>ใช้ได้ในวัน</legend><div class="row-in">' + DAY_SHORT.map((d, i) => '<label class="check day"><input type="checkbox" name="d' + i + '"' + (x.use_days & (1 << i) ? ' checked' : '') + '>' + d + '</label>').join('') + '</div></fieldset>' +
+        '<fieldset class="field"><legend>จำนวนคูปองทั้งหมด</legend><div class="row-in">' + radio('limit', '0', x.max_issue ? 1 : 0, 'ไม่จำกัด') + radio('limit', '1', x.max_issue ? 1 : 0, 'จำกัด') +
+          '<input type="number" name="maxIssue" min="1" style="width:110px" aria-label="จำนวนใบ" value="' + esc(x.max_issue || '') + '" data-show="limit"> <span data-show="limit">ใบ (ใครได้ก่อนได้ก่อน)</span></div></fieldset>' +
+      '</details>' +
+      '<label class="check"><input type="checkbox" name="active"' + (x.is_active ? ' checked' : '') + '>เปิดใช้งาน</label>' +
+      '<div class="err" id="c-err" role="alert" hidden></div>' +
+      '<div class="actions"><button type="button" class="btn ghost" data-a="close">ยกเลิก</button><button class="btn">' + (t ? 'บันทึก' : 'สร้างคูปอง') + '</button></div></div>' +
+      '<aside class="ed-prev" aria-label="ภาพตัวอย่าง"><b>ภาพตัวอย่างในหน้าสมาชิก</b><div class="phone"><div class="phone-top">คูปองของฉัน · ' + esc(brand().short_name) + '</div><div id="c-prev"></div></div></aside></form>';
   }
-  function welcomeForm() {
-    const w = S.data.coupons.welcome.find((x) => x.brand_id === S.brand) || {};
-    return '<form class="grid" data-f="welcome"><label class="check" style="grid-column:1/-1"><input type="checkbox" name="on"' + (w.template_id ? ' checked' : '') + '>แจกคูปองเมื่อสมัครสมาชิก</label>' +
-      discountFields(w.template_id ? w : { discount_type: 'pct', discount_value: 10, valid_days: 30 }, true) +
-      '<p class="muted" style="grid-column:1/-1;margin:0;font-size:13px">มีผลกับสมาชิกที่สมัครหลังจากนี้ คูปองที่แจกไปแล้วไม่เปลี่ยน</p>' + errHtml() +
-      '<div class="actions"><button class="btn">บันทึก</button><button type="button" class="btn ghost" data-a="close">ยกเลิก</button></div></form>';
+  // อ่านค่าจากฟอร์มคูปอง (ใช้ทั้งตอนบันทึกและตอนวาดภาพตัวอย่าง)
+  function couponBody(el) {
+    const v = (n) => { const x = el.elements[n]; return x ? (x.type === 'checkbox' ? x.checked : x.value.trim()) : ''; };
+    let mask = 0; for (let i = 0; i < 7; i++) if (v('d' + i)) mask |= 1 << i;
+    return { brand: S.brand, kind: v('kind'), title: v('title'), description: v('description'), imageId: S.edit.imageId || null, type: v('type'), value: v('value'), maxDiscount: v('maxDiscount'),
+      min: v('min'), code: v('code'), validity: v('validity'), validFrom: v('validFrom'), validTo: v('validTo'), days: v('days'), issueFrom: v('issueFrom'), issueTo: v('issueTo'),
+      tier: v('tier'), followersOnly: v('followersOnly') === '1', useDays: mask, maxIssue: v('limit') === '1' ? v('maxIssue') : '', active: v('active') };
   }
-  function codeForm(code) {
-    const x = code ? S.data.coupons.codes.find((c) => c.code === code) : null;
-    if (x) {
-      return '<form class="grid" data-f="code" data-v="' + esc(x.code) + '"><p style="grid-column:1/-1;margin:0"><b>' + esc(x.code) + '</b> · ' + esc(x.title) + '<br><small class="muted">ใช้ไปแล้ว ' + fmt(x.used_count) + ' ครั้ง · ส่วนลดแก้ไม่ได้ ถ้าต้องการเปลี่ยนให้ปิดโค้ดนี้แล้วสร้างใหม่</small></p>' +
-        '<div class="field"><label for="f-max">ใช้ได้สูงสุด (ครั้ง)</label><input id="f-max" name="maxUses" type="number" min="0" placeholder="ไม่จำกัด" value="' + (x.max_uses === null ? '' : esc(x.max_uses)) + '"></div>' +
-        '<div class="field"><label for="f-exp">หมดเขต</label><input id="f-exp" name="expiresAt" type="date" value="' + isoDay(x.expires_at) + '"></div>' + errHtml() +
-        '<div class="actions"><button class="btn">บันทึก</button><button type="button" class="btn danger" data-a="closeCode" data-v="' + esc(x.code) + '">ปิดโค้ดทันที</button><button type="button" class="btn ghost" data-a="close">ยกเลิก</button></div></form>';
-    }
-    return '<form class="grid" data-f="code"><div class="field"><label for="f-code">โค้ด</label><input id="f-code" name="code" required pattern="[A-Za-z0-9]{4,20}" autocapitalize="characters" data-autofocus placeholder="เช่น HUMLAI50"><span class="hint">ตัวอังกฤษ/ตัวเลข 4-20 ตัว</span></div>' +
-      (S.staff.role === 'super' ? '<div class="field"><label for="f-scope">ใช้ที่</label><select id="f-scope" name="brand"><option value="' + S.brand + '">' + esc(brand().name) + ' เท่านั้น</option><option value="">ทุกแบรนด์ในเครือ</option></select></div>' : '<input type="hidden" name="brand" value="' + S.brand + '">') +
-      discountFields({ discount_type: 'baht', valid_days: 30 }, true) +
-      '<div class="field"><label for="f-max">ใช้ได้สูงสุด (ครั้ง)</label><input id="f-max" name="maxUses" type="number" min="0" placeholder="ไม่จำกัด"></div>' +
-      '<div class="field"><label for="f-exp">หมดเขตกรอกโค้ด</label><input id="f-exp" name="expiresAt" type="date"></div>' + errHtml() +
-      '<div class="actions"><button class="btn">สร้างโค้ด</button><button type="button" class="btn ghost" data-a="close">ยกเลิก</button></div></form>';
+  function syncCoupon(el) {
+    const b = couponBody(el);
+    const show = { pct: b.type === 'pct', code: b.kind === 'code', dates: b.validity === 'dates', days: b.validity !== 'dates', limit: el.elements.limit && el.elements.limit.value === '1' };
+    el.querySelectorAll('[data-show]').forEach((x) => { x.hidden = !show[x.dataset.show]; });
+    const k = KINDS.find((x) => x[0] === b.kind); document.getElementById('kind-hint').textContent = k ? k[2] : '';
+    document.getElementById('c-val-l').textContent = b.type === 'free' ? 'ราคาของที่แจก (บาท)' : b.type === 'pct' ? 'ลดกี่ %' : 'ลดกี่บาท';
+    const big = b.type === 'free' ? 'ฟรี' : b.type === 'pct' ? '-' + (b.value || 0) + '%' : '-' + (b.value || 0);
+    const exp = b.validity === 'dates' ? (b.validTo ? date(b.validTo + 'T12:00:00+07:00') : '-') : (b.days || 30) + ' วันหลังได้รับ';
+    const row = (k2, v2) => '<div class="kv"><span>' + k2 + '</span><span>' + esc(v2) + '</span></div>';
+    document.getElementById('c-prev').innerHTML =
+      (S.edit.imageUrl ? '<img class="prev-img" alt="" src="' + esc(S.edit.imageUrl) + '">' : '<div class="prev-img ph"><b>' + esc(big) + '</b></div>') +
+      '<div class="prev-body"><b>' + esc(b.title || 'ชื่อคูปอง') + '</b>' + (b.description ? '<p>' + esc(b.description) + '</p>' : '') + '<span class="prev-btn">ใช้คูปอง</span></div>' +
+      '<div class="prev-sec"><b>การใช้งาน</b>' + (b.validity === 'dates' ? row('วันที่เริ่มต้น', b.validFrom ? date(b.validFrom + 'T12:00:00+07:00') : '-') : '') + row('วันหมดอายุ', exp) + row('ใช้ได้', '1 ครั้ง') + (b.kind === 'code' ? row('โค้ด', (b.code || '-').toUpperCase()) : '') + '</div>' +
+      '<div class="prev-sec"><b>เงื่อนไข</b>' + row('ขั้นต่ำ', Number(b.min) ? fmt(b.min) + ' บาท' : 'ไม่มี') + (b.type === 'pct' && Number(b.maxDiscount) ? row('ลดสูงสุด', fmt(b.maxDiscount) + ' บาท') : '') + row('ใช้ได้เมื่อ', daysText(b.useDays || 0) || '-') + row('จำกัด', b.maxIssue ? fmt(b.maxIssue) + ' ใบ' : 'ไม่จำกัด') + '</div>';
+  }
+  function rerenderCoupon() {
+    const el = document.querySelector('form[data-f="coupon"]'); if (!el) return;
+    const box = document.getElementById('c-img');
+    box.innerHTML = S.edit.imageUrl ? '<img alt="" src="' + esc(S.edit.imageUrl) + '">' : '<span>ยังไม่มีรูป</span>';
+    const side = el.querySelector('.upl-side'); const drop = side.querySelector('[data-a="dropImage"]');
+    if (S.edit.imageUrl && !drop) side.querySelector('label').insertAdjacentHTML('afterend', '<button type="button" class="btn ghost sm" data-a="dropImage">ลบรูป</button>');
+    if (!S.edit.imageUrl && drop) drop.remove();
+    syncCoupon(el);
+  }
+  // ย่อรูปในเบราว์เซอร์ก่อนอัปโหลด (กว้างไม่เกิน 1080 px) · GIF ส่งไฟล์เดิมเพื่อไม่ให้ภาพเคลื่อนไหวหาย
+  function shrinkImage(file) {
+    return new Promise((ok, fail) => {
+      if (file.size > 10 * 1024 * 1024) return fail(new Error('ไฟล์ใหญ่เกินไป'));
+      const rd = new FileReader();
+      rd.onerror = () => fail(new Error('อ่านไฟล์ไม่สำเร็จ'));
+      rd.onload = () => {
+        if (file.type === 'image/gif') return ok(rd.result);
+        const img = new Image();
+        img.onerror = () => fail(new Error('ไฟล์นี้ไม่ใช่รูปภาพ'));
+        img.onload = () => {
+          const w = Math.min(1080, img.naturalWidth); const h = Math.round(img.naturalHeight * w / img.naturalWidth);
+          const c = document.createElement('canvas'); c.width = w; c.height = h;
+          const g = c.getContext('2d'); g.fillStyle = '#fff'; g.fillRect(0, 0, w, h); g.drawImage(img, 0, 0, w, h);
+          ok(c.toDataURL('image/jpeg', 0.88));
+        };
+        img.src = rd.result;
+      };
+      rd.readAsDataURL(file);
+    });
   }
   const errHtml = () => (S.err ? '<div class="err" role="alert" style="grid-column:1/-1">' + esc(S.err) + '</div>' : '');
 
@@ -256,6 +349,9 @@
       '<form class="grid" data-f="adjust" data-v="' + esc(m.id) + '"><div class="field"><label for="a-pts">ปรับแต้ม (+ เพิ่ม / - ลด)</label><input id="a-pts" name="points" type="number" required></div>' +
       '<div class="field" style="grid-column:span 2"><label for="a-why">เหตุผล</label><input id="a-why" name="reason" required placeholder="เช่น ลืมสแกนบิล HL01-000123"></div><div class="actions" style="grid-column:auto"><button class="btn">ส่งขออนุมัติ</button></div></form>' +
       '<small class="muted">การปรับแต้มต้องให้อีกคนอนุมัติที่เมนู "อนุมัติแต้ม"</small>' +
+      (S.giftable && S.giftable.length ? '<form class="grid" data-f="gift" data-v="' + esc(m.id) + '"><div class="field" style="grid-column:span 2"><label for="g-tpl">มอบคูปองให้สมาชิกคนนี้</label><select id="g-tpl" name="templateId"><option value="">เลือกคูปอง</option>' +
+        S.giftable.map((t) => '<option value="' + t.id + '">' + esc((KIND_NAME[t.kind] || '') + ' · ' + t.title) + '</option>').join('') + '</select></div><div class="actions" style="grid-column:auto"><button class="btn">มอบคูปอง</button></div></form>' : '') +
+      (coupons.length ? '<small class="muted">คูปองพร้อมใช้: ' + coupons.map((c) => esc(c.title) + ' (' + esc(c.code) + ')').join(', ') + '</small>' : '') +
       '<h3 style="font-size:15px">ประวัติแต้มล่าสุด</h3><div class="wrap"><table class="tbl"><tbody>' +
       d.ledger.filter((l) => l.brand_id === S.brand).slice(0, 15).map((l) => '<tr><td>' + date(l.created_at) + '</td><td>' + esc(l.note || l.entry_type) + '</td><td class="r num" style="color:' + (l.points >= 0 ? 'var(--good)' : 'var(--bad)') + '">' + (l.points >= 0 ? '+' : '') + fmt(l.points) + '</td><td class="r num">' + fmt(l.balance_after) + '</td></tr>').join('') +
       '</tbody></table></div></div>';
@@ -337,11 +433,10 @@
   function dialog() {
     const e = S.edit; let title = ''; let body = '';
     if (e.kind === 'reward') { const r = e.id === 'new' ? null : S.data.rewards.find((x) => String(x.id) === String(e.id)); title = r ? 'แก้ไขของรางวัล' : 'เพิ่มของรางวัล · ' + brand().name; body = rewardForm(r); }
-    if (e.kind === 'welcome') { title = 'คูปองต้อนรับ · ' + brand().name; body = welcomeForm(); }
-    if (e.kind === 'code') { title = e.id ? 'แก้ไขโค้ด' : 'สร้างโค้ดคูปอง'; body = codeForm(e.id); }
+    if (e.kind === 'coupon') { title = e.id ? 'แก้ไขคูปอง' : 'สร้างคูปอง · ' + brand().name; body = couponForm(e.id); }
     if (e.kind === 'staff') { title = e.id ? 'แก้ไขผู้ใช้ ' + e.id : 'เพิ่มผู้ใช้'; body = staffForm(e.id); }
     if (e.kind === 'staffpw') { title = 'ตั้งรหัสผ่านใหม่ให้ ' + e.id; body = staffPwForm(e.id); }
-    return '<div class="scrim" data-a="close"></div><div class="dialog" role="dialog" aria-modal="true" aria-label="' + esc(title) + '"><h2>' + esc(title) + '</h2>' + body + '</div>';
+    return '<div class="scrim" data-a="close"></div><div class="dialog' + (e.kind === 'coupon' ? ' wide' : '') + '" role="dialog" aria-modal="true" aria-label="' + esc(title) + '"><h2>' + esc(title) + '</h2>' + body + '</div>';
   }
 
   /* ---------- การกด ---------- */
@@ -352,12 +447,17 @@
     brand: async (v) => { S.brand = v; store.set('crm-admin-brand', v); S.member = null; applyTheme(); await load(); },
     close: () => { S.edit = null; S.err = ''; render(); },
     editReward: (v) => { S.edit = { kind: 'reward', id: v }; S.err = ''; render(); },
-    editWelcome: () => { S.edit = { kind: 'welcome' }; S.err = ''; render(); },
-    editCode: (v) => { S.edit = { kind: 'code', id: v || null }; S.err = ''; render(); },
-    closeCode: async (v) => {
-      if (!confirm('ปิดโค้ด ' + v + ' ทันที? ลูกค้าจะกรอกโค้ดนี้ไม่ได้อีก (คูปองที่รับไปแล้วยังใช้ได้)')) return;
-      await api('PATCH', '/api/admin/promo-codes/' + encodeURIComponent(v), { active: false }); S.edit = null; toast('ปิดโค้ดแล้ว'); await load();
+    cfilter: (v) => { S.cfilter = v; render(); },
+    editCoupon: (v) => {
+      const t = v ? S.data.coupons.find((x) => String(x.id) === String(v)) : null;
+      S.edit = { kind: 'coupon', id: v || null, imageId: t ? t.image_id : null, imageUrl: t && t.image_id ? '/api/public/coupon-images/' + t.image_id : null }; S.err = ''; render();
     },
+    toggleCoupon: async (v) => {
+      const t = S.data.coupons.find((x) => String(x.id) === String(v));
+      if (t.is_active && !confirm('ปิดคูปอง "' + t.title + '"? จะหยุดแจกทันที (คูปองที่ลูกค้าได้ไปแล้วยังใช้ได้จนหมดอายุ)')) return;
+      await api('PATCH', '/api/admin/coupon-templates/' + v, { active: !t.is_active }); toast(t.is_active ? 'ปิดคูปองแล้ว' : 'เปิดคูปองแล้ว'); await load();
+    },
+    dropImage: () => { S.edit.imageId = null; S.edit.imageUrl = null; rerenderCoupon(); },
     myPassword: () => passwordView(false),
     backHome: () => render(),
     editStaff: (v) => { S.edit = { kind: 'staff', id: v || null }; S.err = ''; render(); },
@@ -385,14 +485,15 @@
       if (id === 'new') await api('POST', '/api/admin/rewards', body); else await api('PATCH', '/api/admin/rewards/' + id, body);
       S.edit = null; toast('บันทึกของรางวัลแล้ว'); await load();
     },
-    welcome: async (o) => {
-      await api('PUT', '/api/admin/welcome-coupon/' + S.brand, o.on ? { title: o.title, type: o.type, value: o.value, min: o.min, days: o.days } : { off: true });
-      S.edit = null; toast('บันทึกคูปองต้อนรับแล้ว'); await load();
+    coupon: async (_o, id, el) => {
+      const body = couponBody(el);
+      if (id) await api('PATCH', '/api/admin/coupon-templates/' + id, body); else await api('POST', '/api/admin/coupon-templates', body);
+      S.edit = null; toast(id ? 'บันทึกคูปองแล้ว' : 'สร้างคูปองแล้ว'); await load();
     },
-    code: async (o, code) => {
-      if (code) await api('PATCH', '/api/admin/promo-codes/' + encodeURIComponent(code), { maxUses: o.maxUses, expiresAt: o.expiresAt || null });
-      else await api('POST', '/api/admin/promo-codes', { code: o.code, brand: o.brand || null, title: o.title, type: o.type, value: o.value, min: o.min, days: o.days, maxUses: o.maxUses, expiresAt: o.expiresAt || null });
-      S.edit = null; toast(code ? 'บันทึกโค้ดแล้ว' : 'สร้างโค้ดแล้ว'); await load();
+    gift: async (o, id) => {
+      if (!o.templateId) throw new Error('เลือกคูปองที่จะมอบ');
+      const r = await api('POST', '/api/admin/members/' + encodeURIComponent(id) + '/coupons', { templateId: o.templateId });
+      toast('มอบคูปองแล้ว (' + r.code + ')'); await openMember(id); render();
     },
     rule: async (o) => {
       await api('PUT', '/api/admin/earn-rules/' + S.brand, { baht: o.baht, pts: o.pts, base: o.base, rounding: o.rounding, welcome: Number(o.welcome), expiryMonths: Number(o.expiryMonths), backdays: Number(o.backdays),
@@ -431,7 +532,9 @@
     if (S.busy) return; S.busy = true;
     try { await fn(); } catch (e) {
       if (e.silent) return;
-      if (isForm && (S.edit || S.page === 'rules')) { S.err = e.message; render(); } else toast(e.message);
+      const ce = document.getElementById('c-err');
+      if (isForm && ce) { ce.textContent = e.message; ce.hidden = false; ce.scrollIntoView({ block: 'nearest' }); }
+      else if (isForm && (S.edit || S.page === 'rules')) { S.err = e.message; render(); } else toast(e.message);
     } finally { S.busy = false; }
   }
   document.addEventListener('click', (e) => {
@@ -447,6 +550,19 @@
     const fn = F[el.dataset.f]; if (!fn) return;
     if (el.dataset.f === 'login' || el.dataset.f === 'password') { fn(form(el)); return; }
     guard(() => fn(form(el), el.dataset.v, el), true);
+  });
+  document.addEventListener('input', (e) => { const f = e.target.closest && e.target.closest('form[data-f="coupon"]'); if (f) syncCoupon(f); });
+  document.addEventListener('change', async (e) => {
+    const f = e.target.closest && e.target.closest('form[data-f="coupon"]');
+    if (f) syncCoupon(f);
+    if (e.target.id !== 'c-file' || !e.target.files[0]) return;
+    const box = document.getElementById('c-img'); box.innerHTML = '<span>กำลังอัปโหลด…</span>';
+    try {
+      const dataUrl = await shrinkImage(e.target.files[0]);
+      const r = await api('POST', '/api/admin/coupon-images', { dataUrl, brand: S.brand });
+      S.edit.imageId = r.id; S.edit.imageUrl = r.url;
+    } catch (err) { if (!err.silent) toast(err.message); }
+    e.target.value = ''; rerenderCoupon();
   });
   document.addEventListener('change', (e) => {
     if (e.target.id !== 's-role' || !S.edit) return;
