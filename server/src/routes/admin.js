@@ -114,8 +114,32 @@ function rewardFields(b) {
   const cat = CATS.includes(b.cat) ? b.cat : 'food';
   const type = cat === 'discount' && b.type === 'pct' ? 'pct' : 'baht'; const value = Math.max(0, Number(b.value) || 0);
   if (cat === 'discount' && !(value > 0)) throw bad('reward_invalid', 'รางวัลแบบส่วนลด ต้องใส่มูลค่าส่วนลด');
-  return { name, cost, cat, type, value, min: Math.max(0, Number(b.min) || 0), days: Math.min(365, Math.max(1, parseInt(b.days, 10) || 30)), stock: optInt(b.stock) };
+  const kind = b.kind === 'coupon' ? 'coupon' : 'general';
+  const templateId = kind === 'coupon' ? parseInt(b.templateId, 10) : null;
+  if (kind === 'coupon' && !(templateId > 0)) throw bad('coupon_required', 'เลือกคูปองที่จะให้แลก');
+  // ระดับสมาชิกที่แลกได้: ว่างหรือเลือกครบ = ทุกระดับ
+  const tiers = Array.isArray(b.tiers) ? TIERS.filter((t) => b.tiers.includes(t)) : [];
+  if (Array.isArray(b.tiers) && !tiers.length) throw bad('tier_required', 'เลือกระดับสมาชิกที่แลกได้อย่างน้อย 1 ระดับ');
+  const limitCount = optInt(b.limitCount) || null;
+  const limitPeriod = PERIODS.includes(b.limitPeriod) ? b.limitPeriod : 'all';
+  const day = (v) => { if (!v) return null; if (!/^\d{4}-\d{2}-\d{2}$/.test(String(v))) throw bad('date_invalid', 'วันที่ไม่ถูกต้อง'); return String(v); };
+  const startDate = day(b.startDate); const endDate = day(b.endDate);
+  if (startDate && endDate && startDate > endDate) throw bad('dates_invalid', 'วันเริ่มต้องไม่เกินวันหมดอายุ');
+  return { name, cost, cat: kind === 'coupon' ? 'coupon' : cat, type, value, min: Math.max(0, Number(b.min) || 0), days: Math.min(365, Math.max(1, parseInt(b.days, 10) || 30)), stock: optInt(b.stock),
+    kind, templateId, description: String(b.description || '').trim().slice(0, 1000), imageId: b.imageId ? parseInt(b.imageId, 10) : null,
+    tiers: tiers.length && tiers.length < TIERS.length ? tiers : null, limitCount, limitPeriod, startDate, endDate };
 }
+const TIERS = ['SILVER', 'GOLD', 'PLATINUM'];
+const PERIODS = ['day', 'week', 'month', 'year', 'all'];
+// ของรางวัลแบบคูปอง: ต้องเป็นคูปองของแบรนด์เดียวกันที่สร้างในเมนูคูปอง (ไม่ใช่คูปองภายในของรางวัลอื่น)
+async function couponForReward(db, brandId, templateId) {
+  const t = await db.one("SELECT id FROM coupon_templates WHERE id = $1 AND brand_id = $2 AND kind <> 'internal' AND is_active", [templateId, brandId]);
+  if (!t) throw bad('coupon_invalid', 'คูปองที่เลือกไม่มีแล้วหรือถูกปิดอยู่');
+  return t.id;
+}
+const REWARD_COLS = 'name = $2, category = $3, points_cost = $4, stock = $5, is_active = COALESCE($6, is_active), coupon_template_id = $7, kind = $8, description = $9, image_id = $10, tiers = $11, limit_count = $12, limit_period = $13, start_date = $14, end_date = $15';
+const rewardArgs = (f) => [f.name, f.cat, f.cost, f.stock];
+const rewardExtra = (f) => [f.kind, f.description, f.imageId, f.tiers, f.limitCount, f.limitPeriod, f.startDate, f.endDate];
 // รางวัลแบบของฟรี: คูปองลดเท่าราคาของชิ้นนั้น (value) · แบบส่วนลด: ลดตามที่ตั้ง
 const rewardTemplate = (f) => f.cat === 'discount'
   ? { title: f.name, big: f.type === 'pct' ? '-' + f.value + '%' : '-' + f.value, small: f.type === 'pct' ? 'ส่วนลด' : 'บาท', cond: 'แลกด้วย ' + f.cost + ' แต้ม' + (f.min ? ' · ซื้อครบ ' + f.min + ' บาท' : ''), type: f.type, value: f.value, min: f.min, days: f.days }
@@ -306,7 +330,8 @@ export default function (r) {
 
   r.get('/api/admin/rewards', async (req) => {
     const s = await staffUser(req); requirePage(s, 'rewards');
-    return q(`SELECT r.*, t.discount_type, t.discount_value, t.min_spend, t.valid_days,
+    return q(`SELECT r.*, to_char(r.start_date, 'YYYY-MM-DD') AS start_day, to_char(r.end_date, 'YYYY-MM-DD') AS end_day,
+      t.discount_type, t.discount_value, t.min_spend, t.valid_days, t.title AS coupon_title,
       (SELECT count(*) FROM point_ledger l WHERE l.entry_type = 'redeem' AND l.ref_type = 'reward' AND l.ref_id = r.id::text)::int AS redeemed
       FROM rewards r JOIN coupon_templates t ON t.id = r.coupon_template_id WHERE r.brand_id = ANY($1) ORDER BY r.brand_id, r.is_active DESC, r.points_cost`, [s.brands]);
   });
@@ -314,9 +339,9 @@ export default function (r) {
     const s = await staffUser(req); requirePage(s, 'rewards'); requireBrand(s, b.brand);
     const f = rewardFields(b);
     return tx(async (db) => {
-      const t = await newTemplate(db, b.brand, rewardTemplate(f));
-      const rw = await db.one('INSERT INTO rewards (brand_id, name, category, points_cost, coupon_template_id, stock, is_active) VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *',
-        [b.brand, f.name, f.cat, f.cost, t, f.stock, b.active !== false]);
+      const t = f.kind === 'coupon' ? await couponForReward(db, b.brand, f.templateId) : await newTemplate(db, b.brand, rewardTemplate(f));
+      const rw = await db.one(`INSERT INTO rewards (brand_id, name, category, points_cost, stock, is_active, coupon_template_id, kind, description, image_id, tiers, limit_count, limit_period, start_date, end_date)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) RETURNING *`, [b.brand, ...rewardArgs(f), b.active !== false, t, ...rewardExtra(f)]);
       await core.audit(db, actor(s), 'create_reward', { type: 'reward', id: String(rw.id) }, b.brand + ' · ' + f.name + ' · ' + f.cost + ' แต้ม');
       return rw;
     });
@@ -324,18 +349,26 @@ export default function (r) {
   // แก้รางวัล: ถ้าเปลี่ยนชื่อ/ส่วนลด จะสร้างแม่แบบคูปองใหม่ คูปองที่ลูกค้าแลกไปแล้วยังใช้ตามเงื่อนไขเดิม
   r.patch('/api/admin/rewards/:id', async (req, b, _u, p) => {
     const s = await staffUser(req); requirePage(s, 'rewards');
-    const rw = await one('SELECT r.*, t.discount_type, t.discount_value, t.min_spend, t.valid_days FROM rewards r JOIN coupon_templates t ON t.id = r.coupon_template_id WHERE r.id = $1', [parseInt(p.id.replace(/\D/g, ''), 10)]);
+    const rw = await one(`SELECT r.*, to_char(r.start_date, 'YYYY-MM-DD') AS start_day, to_char(r.end_date, 'YYYY-MM-DD') AS end_day, t.discount_type, t.discount_value, t.min_spend, t.valid_days
+      FROM rewards r JOIN coupon_templates t ON t.id = r.coupon_template_id WHERE r.id = $1`, [parseInt(p.id.replace(/\D/g, ''), 10)]);
     if (!rw) throw notFound(); requireBrand(s, rw.brand_id);
+    const kept = (k, v) => (k in b ? b[k] : v);
     const f = rewardFields({
       name: b.name ?? rw.name, cat: b.cat ?? rw.category, cost: b.cost ?? rw.points_cost,
       value: b.value ?? rw.discount_value, type: b.type ?? rw.discount_type, min: b.min ?? rw.min_spend, days: b.days ?? rw.valid_days,
-      stock: 'stock' in b ? b.stock : rw.stock
+      stock: kept('stock', rw.stock), kind: b.kind ?? rw.kind, templateId: b.templateId ?? rw.coupon_template_id,
+      description: kept('description', rw.description), imageId: kept('imageId', rw.image_id), tiers: kept('tiers', rw.tiers || undefined),
+      limitCount: kept('limitCount', rw.limit_count), limitPeriod: b.limitPeriod ?? rw.limit_period,
+      startDate: kept('startDate', rw.start_day), endDate: kept('endDate', rw.end_day)
     });
     return tx(async (db) => {
-      const changed = f.name !== rw.name || f.cat !== rw.category || f.value !== Number(rw.discount_value) || f.type !== rw.discount_type || f.min !== Number(rw.min_spend) || f.days !== rw.valid_days;
-      const tpl = changed ? await newTemplate(db, rw.brand_id, rewardTemplate(f)) : rw.coupon_template_id;
-      const out = await db.one('UPDATE rewards SET name = $2, category = $3, points_cost = $4, stock = $5, is_active = COALESCE($6, is_active), coupon_template_id = $7 WHERE id = $1 RETURNING *',
-        [rw.id, f.name, f.cat, f.cost, f.stock, b.active ?? null, tpl]);
+      let tpl;
+      if (f.kind === 'coupon') tpl = await couponForReward(db, rw.brand_id, f.templateId);
+      else {
+        const changed = rw.kind !== 'general' || f.name !== rw.name || f.cat !== rw.category || f.value !== Number(rw.discount_value) || f.type !== rw.discount_type || f.min !== Number(rw.min_spend) || f.days !== rw.valid_days;
+        tpl = changed ? await newTemplate(db, rw.brand_id, rewardTemplate(f)) : rw.coupon_template_id;
+      }
+      const out = await db.one('UPDATE rewards SET ' + REWARD_COLS + ' WHERE id = $1 RETURNING *', [rw.id, ...rewardArgs(f), b.active ?? null, tpl, ...rewardExtra(f)]);
       await core.audit(db, actor(s), 'update_reward', { type: 'reward', id: String(rw.id) }, out.name + ' · ' + out.points_cost + ' แต้ม' + (out.is_active ? '' : ' · ปิดแลก'), rw, out);
       return out;
     });

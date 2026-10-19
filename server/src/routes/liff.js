@@ -77,9 +77,13 @@ export default function (r) {
     return { couponId: String(c.id), code: c.code };
   });
 
+  // ของรางวัลที่เปิดแลกตอนนี้ · why = เหตุผลที่สมาชิกคนนี้แลกไม่ได้ (ระดับ/ครบสิทธิ์/หมด)
   r.get('/api/liff/rewards', async (req, _b, url) => {
-    await liffUser(req);
-    return q('SELECT r.id, r.brand_id, r.name, r.category, r.points_cost, r.stock, t.discount_type, t.discount_value, t.min_spend FROM rewards r JOIN coupon_templates t ON t.id = r.coupon_template_id WHERE r.is_active AND r.brand_id = $1 ORDER BY r.points_cost', [url.searchParams.get('brand')]);
+    const { m } = await me(req);
+    const list = await core.rewardsFor({ q, one }, { brandId: url.searchParams.get('brand'), memberId: m ? m.id : null });
+    return list.map((r) => ({ id: r.id, brand_id: r.brand_id, kind: r.kind, name: r.name, category: r.category, points_cost: r.points_cost, stock: r.stock,
+      description: r.description, image: r.image_id ? '/api/public/coupon-images/' + r.image_id : null, discount_type: r.discount_type, discount_value: r.discount_value,
+      min_spend: r.min_spend, valid_days: r.valid_days, endDay: r.end_day, why: r.why }));
   });
 
   r.post('/api/liff/redemptions', async (req, body) => {
