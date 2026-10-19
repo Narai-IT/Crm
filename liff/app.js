@@ -142,7 +142,8 @@
       '<div style="display:flex;flex-direction:column;gap:6px"><div class="bar"><i style="width:' + pct + '%"></i></div><div class="row"><small>' + (t.next ? 'อีก ' + fmt(t.need) + ' แต้ม ขึ้นระดับ ' + t.next : 'ระดับสูงสุดแล้ว') + '</small><small class="num">' + fmt(t.max) + '</small></div></div>' +
       (w.nextExpiry ? '<small style="color:#F6C9AF">แต้มชุดแรกจะหมดอายุ ' + date(w.nextExpiry) + '</small>' : '') + '</div>' +
       '<div class="card qr"><b style="font-family:var(--f-display)">ยื่น QR ให้พนักงานสแกนก่อนชำระเงิน</b><div class="qr-img" id="qr-img">' + qrHtml() + '</div>' +
-      '<span class="muted" style="letter-spacing:1px">' + esc(m.id) + '</span><span class="muted" style="font-size:12px">QR เปลี่ยนใน <b id="qr-left" class="num">' + qrLeft() + '</b> วินาที เพื่อความปลอดภัย</span></div>' +
+      '<span class="muted" style="letter-spacing:1px">' + esc(m.id) + '</span><span class="muted" style="font-size:12px">QR เปลี่ยนใน <b id="qr-left" class="num">' + qrLeft() + '</b> วินาที เพื่อความปลอดภัย</span>' +
+        (S.qr && S.qr.pin ? '<div class="pin"><small>รหัสยืนยันสำหรับสั่งอาหารเอง (ใช้คูปอง/แลกแต้ม)</small><b id="qr-pin" class="num">' + esc(S.qr.pin.slice(0, 3) + ' ' + S.qr.pin.slice(3)) + '</b></div>' : '') + '</div>' +
       '<div class="stats"><button data-a="tab" data-v="history"><b>' + I.receipt + '</b><span>บิลและแต้ม</span></button><button data-a="tab" data-v="coupons"><b style="color:var(--ai)">' + ready.length + '</b><span>คูปองพร้อมใช้</span></button><button data-a="tab" data-v="rewards"><b>' + canRedeem + '</b><span>รางวัลที่แลกได้</span></button></div>' +
       (ready.length ? '<div class="sec"><b>คูปองใกล้หมดอายุ</b><button class="link" data-a="tab" data-v="coupons">ดูทั้งหมด</button></div>' + couponHtml(ready[0], true) : '');
   }
@@ -298,7 +299,10 @@
     const el = document.getElementById('qr-left'); if (!el) return;
     const l = qrLeft(); el.textContent = l;
     if (l <= 0 && !S.busy) {
-      try { await loadQr(); const box = document.getElementById('qr-img'); if (box) box.innerHTML = qrHtml(); } catch (e) { /* ลองใหม่รอบถัดไป */ }
+      try {
+        await loadQr(); const box = document.getElementById('qr-img'); if (box) box.innerHTML = qrHtml();
+        const pin = document.getElementById('qr-pin'); if (pin && S.qr.pin) pin.textContent = S.qr.pin.slice(0, 3) + ' ' + S.qr.pin.slice(3);
+      } catch (e) { /* ลองใหม่รอบถัดไป */ }
     }
   }, 1000);
   document.addEventListener('visibilitychange', () => { if (!document.hidden && S.me && S.me.member) refresh().catch(() => {}); });
