@@ -570,3 +570,58 @@ t('ของรางวัล: แบบคูปอง · จำกัดร�
   await call('PATCH', '/api/admin/rewards/' + future.data.id, { startDate: null }, adm);
   assert.equal((await redeem(future.data.id, 'rw-fut-2')).status, 200);
 });
+
+t('หลังบ้านสมาชิก: เพิ่มสมาชิกเอง · แท็ก (ติดเอง/อัตโนมัติ) · หมายเหตุ · กรอง/แบ่งหน้า', async () => {
+  const adm = { authorization: 'Bearer ' + (await call('POST', '/api/admin/login', { username: 'S003', password: 'demo1234' })).data.token };
+  // เพิ่มสมาชิก: ต้องยินยอม · เบอร์ซ้ำบอกเลขเดิม · ได้แต้มต้อนรับ
+  assert.equal((await call('POST', '/api/admin/members', { brand: 'humlai', name: 'ลูกค้าหน้าร้าน', phone: '0811112222' }, adm)).status, 400);
+  const add = await call('POST', '/api/admin/members', { brand: 'humlai', name: 'ลูกค้าหน้าร้าน', phone: '081-111-2222', birthday: '1990-05-01', branchId: 'HL01', consent: true }, adm);
+  assert.equal(add.status, 200, JSON.stringify(add.data));
+  const mid = add.data.id;
+  const dup = await call('POST', '/api/admin/members', { brand: 'humlai', name: 'ซ้ำ', phone: '0811112222', consent: true }, adm);
+  assert.equal(dup.status, 409); assert.match(dup.data.message, new RegExp(mid));
+  assert.equal((await mods.db.one('SELECT line_user_id FROM member_line_identities WHERE member_id = $1', [mid])), null);
+
+  // ค้นหาเจอ · มีแท็กอัตโนมัติ "ยังไม่ผูก LINE" + "สมาชิกใหม่"
+  const noLine = await call('POST', '/api/admin/tags', { brand: 'humlai', name: 'ยังไม่ผูก LINE', kind: 'auto', rule: { type: 'no_line' }, color: 'gray' }, adm);
+  assert.equal(noLine.status, 200, JSON.stringify(noLine.data));
+  const fresh = await call('POST', '/api/admin/tags', { brand: 'humlai', name: 'สมาชิกใหม่ 30 วัน', kind: 'auto', rule: { type: 'new', days: 30 } }, adm);
+  assert.equal((await call('POST', '/api/admin/tags', { brand: 'humlai', name: 'อะไร', kind: 'auto', rule: { type: 'hack' } }, adm)).status, 400);
+  const vip = await call('POST', '/api/admin/tags', { brand: 'humlai', name: 'VIP', color: 'purple' }, adm);
+  assert.equal((await call('POST', '/api/admin/tags', { brand: 'humlai', name: 'vip' }, adm)).status, 409);
+  const found = (await call('GET', '/api/admin/members?brand=humlai&q=0811112222', undefined, adm)).data;
+  assert.equal(found.total, 1);
+  const names = found.rows[0].tags.map((x) => x.name);
+  assert.ok(names.includes('ยังไม่ผูก LINE') && names.includes('สมาชิกใหม่ 30 วัน'), JSON.stringify(names));
+  assert.equal(found.rows[0].tier, 'SILVER');
+
+  // ติดแท็กเอง · กรองด้วยแท็ก · ติดแท็กอัตโนมัติเองไม่ได้ · ถอดแท็ก
+  assert.equal((await call('POST', '/api/admin/members/' + mid + '/tags', { tagId: vip.data.id }, adm)).status, 200);
+  assert.equal((await call('POST', '/api/admin/members/' + mid + '/tags', { tagId: noLine.data.id }, adm)).status, 400);
+  const byTag = (await call('GET', '/api/admin/members?brand=humlai&tag=' + vip.data.id, undefined, adm)).data;
+  assert.deepEqual(byTag.rows.map((r) => r.id), [mid]);
+  const tags = (await call('GET', '/api/admin/tags?brand=humlai', undefined, adm)).data;
+  assert.equal(tags.find((x) => x.id === vip.data.id).members, 1);
+  assert.ok(tags.find((x) => x.id === fresh.data.id).members >= 1);
+  assert.equal((await call('DELETE', '/api/admin/members/' + mid + '/tags/' + vip.data.id, undefined, adm)).status, 200);
+  assert.equal((await call('GET', '/api/admin/members?brand=humlai&tag=' + vip.data.id, undefined, adm)).data.total, 0);
+
+  // หมายเหตุ + รายละเอียดเฉพาะแบรนด์
+  await call('PUT', '/api/admin/members/' + mid + '/note', { brand: 'humlai', note: 'แพ้ถั่ว' }, adm);
+  const det = (await call('GET', '/api/admin/members/' + mid + '?brand=humlai', undefined, adm)).data;
+  assert.equal(det.extra.note, 'แพ้ถั่ว');
+  assert.ok(det.extra.tags.some((x) => x.name === 'ยังไม่ผูก LINE'));
+
+  // แบ่งหน้า · กรองระดับ · ดาวน์โหลดทั้งหมดบันทึกประวัติ
+  const p1 = (await call('GET', '/api/admin/members?brand=humlai&size=5&page=1', undefined, adm)).data;
+  const p2 = (await call('GET', '/api/admin/members?brand=humlai&size=5&page=2', undefined, adm)).data;
+  assert.equal(p1.rows.length, 5); assert.ok(p1.total > 5);
+  assert.ok(!p2.rows.some((r) => p1.rows.some((x) => x.id === r.id)));
+  const gold = (await call('GET', '/api/admin/members?brand=humlai&tier=GOLD', undefined, adm)).data;
+  assert.ok(gold.rows.every((r) => r.tier === 'GOLD'));
+  const all = (await call('GET', '/api/admin/members?brand=humlai&all=1', undefined, adm)).data;
+  assert.equal(all.rows.length, p1.total);
+  assert.ok(await mods.db.one("SELECT 1 FROM audit_logs WHERE action = 'export_members'"));
+  // ลบแท็ก
+  assert.equal((await call('DELETE', '/api/admin/tags/' + fresh.data.id, undefined, adm)).status, 200);
+});

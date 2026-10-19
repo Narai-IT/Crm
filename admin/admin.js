@@ -6,7 +6,8 @@
   const $app = document.getElementById('app');
   const S = {
     token: null, staff: null, brands: [], brand: null, page: 'rewards',
-    data: {}, edit: null, err: '', q: '', member: null, busy: false
+    data: {}, edit: null, err: '', q: '', member: null, busy: false,
+    mf: { q: '', tier: '', branch: '', tag: '', page: 1 }, mtab: 'm', actf: 'all', tagPick: false
   };
   const MENU = [
     ['dash', 'dash', 'ภาพรวม'], ['rewards', 'rewards', 'ของรางวัล'], ['coupons', 'rewards', 'คูปอง'], ['rules', 'rules', 'กฎแต้ม'],
@@ -109,7 +110,10 @@
     if (S.page === 'rewards') [d.rewards, d.tpls] = await Promise.all([api('GET', '/api/admin/rewards'), api('GET', '/api/admin/coupon-templates?brand=' + b)]);
     if (S.page === 'coupons') d.coupons = await api('GET', '/api/admin/coupon-templates?brand=' + b);
     if (S.page === 'rules') d.rules = await api('GET', '/api/admin/earn-rules');
-    if (S.page === 'members') { d.members = await api('GET', '/api/admin/members?brand=' + b + '&q=' + encodeURIComponent(S.q)); if (S.member) await openMember(S.member.member.id); }
+    if (S.page === 'members') {
+      [d.members, d.tags] = await Promise.all([api('GET', '/api/admin/members?' + memberQs()), api('GET', '/api/admin/tags?brand=' + b)]);
+      if (S.member) await openMember(S.member.member.id);
+    }
     if (S.page === 'approvals') d.approvals = await api('GET', '/api/admin/point-adjustments');
     if (S.page === 'branches') d.branches = await api('GET', '/api/admin/branches');
     if (S.page === 'staff') d.staff = await api('GET', '/api/admin/staff');
@@ -117,7 +121,7 @@
     render();
   }
   async function openMember(id) {
-    const [m, tpls] = await Promise.all([api('GET', '/api/admin/members/' + encodeURIComponent(id)), can('rewards') ? api('GET', '/api/admin/coupon-templates?brand=' + S.brand) : Promise.resolve([])]);
+    const [m, tpls] = await Promise.all([api('GET', '/api/admin/members/' + encodeURIComponent(id) + '?brand=' + S.brand), can('rewards') ? api('GET', '/api/admin/coupon-templates?brand=' + S.brand) : Promise.resolve([])]);
     S.member = m;
     // คูปองที่มอบได้: ยังเปิด และอยู่ในช่วงแจก (ของขวัญขึ้นก่อน)
     S.giftable = tpls.filter((t) => couponState(t)[0] === 'เปิดใช้งาน' && t.brand_id === S.brand).sort((a, b) => (a.kind === 'gift' ? 0 : 1) - (b.kind === 'gift' ? 0 : 1));
@@ -137,6 +141,7 @@
     const auto = document.querySelector('[data-autofocus]'); if (auto) auto.focus();
     const cf = document.querySelector('form[data-f="coupon"]'); if (cf) syncCoupon(cf);
     const rf = document.querySelector('form[data-f="reward"]'); if (rf) syncReward(rf);
+    const tf = document.querySelector('form[data-f="tag"]'); if (tf) syncTagForm(tf);
   }
 
   function dashView() {
@@ -403,32 +408,137 @@
       '<div class="actions rules-foot"><button class="btn">บันทึกกฎแต้ม</button><small class="muted">มีผลกับบิลหลังบันทึก บิลเก่าคิดตามกฎเดิม · กฎนี้ใช้อยู่ตั้งแต่ ' + date(r.effective_from) + '</small></div></form>';
   }
 
-  function membersView() {
-    const list = S.data.members || [];
-    const m = S.member;
-    return '<form class="card" data-f="search"><div class="grid"><div class="field" style="grid-column:span 2"><label for="q">ค้นหา (ชื่อ เบอร์ หรือเลขสมาชิก)</label><input id="q" name="q" value="' + esc(S.q) + '" type="search"></div><div class="actions" style="grid-column:auto"><button class="btn">ค้นหา</button></div></div></form>' +
-      (m ? memberDetail(m) : '') +
-      '<div class="card"><h2>สมาชิก ' + esc(brand().name) + ' (' + fmt(list.length) + (list.length >= 200 ? '+' : '') + ')</h2>' +
-      (list.length ? '<div class="wrap"><table class="tbl"><thead><tr><th>เลขสมาชิก</th><th>ชื่อ</th><th>เบอร์</th><th class="r">แต้ม ' + esc(brand().short_name) + '</th><th>สมัคร</th><th></th></tr></thead><tbody>' +
-        list.map((x) => '<tr><td>' + esc(x.id) + '</td><td>' + esc(x.full_name) + '</td><td>' + esc(x.phone) + '</td><td class="r num">' + fmt((x.wallets || {})[S.brand]) + '</td><td>' + date(x.created_at) + '</td><td class="r"><button class="btn ghost sm" data-a="member" data-v="' + esc(x.id) + '">ดู</button></td></tr>').join('') + '</tbody></table></div>'
-        : '<p class="muted">ไม่พบสมาชิก</p>') + '</div>';
+  /* ---------- สมาชิก: รายการซ้าย รายละเอียดขวา ---------- */
+  const TIER_LABEL = { SILVER: 'Silver', GOLD: 'Gold', PLATINUM: 'Platinum' };
+  const TAG_COLORS = [['blue', 'ฟ้า'], ['green', 'เขียว'], ['orange', 'ส้ม'], ['red', 'แดง'], ['purple', 'ม่วง'], ['gray', 'เทา']];
+  const AUTO_RULES = [['new', 'สมาชิกใหม่ (สมัครภายใน N วัน)'], ['inactive', 'หายไป (เคยซื้อ แต่ไม่มา N วัน)'], ['visits', 'มาบ่อย (≥ N บิล ใน D วัน)'],
+    ['spend', 'ยอดซื้อสูง (≥ X บาท ใน D วัน)'], ['birthday', 'เกิดเดือนนี้'], ['no_line', 'ยังไม่ผูก LINE']];
+  function memberQs(extra) {
+    const o = { brand: S.brand, page: S.mf.page, size: 10 }; ['q', 'tier', 'branch', 'tag'].forEach((k) => { if (S.mf[k]) o[k] = S.mf[k]; });
+    return new URLSearchParams(Object.assign(o, extra || {})).toString();
   }
-  function memberDetail(d) {
-    const m = d.member; const w = d.wallets[S.brand] || { balance: 0, tier: {} };
+  const ruleText = (r) => {
+    if (!r) return '';
+    return { new: 'สมัครภายใน ' + r.days + ' วัน', inactive: 'ไม่มา ' + r.days + ' วัน', visits: '≥ ' + r.count + ' บิล ใน ' + r.days + ' วัน', spend: 'ยอด ≥ ' + fmt(r.amount) + ' บาท ใน ' + r.days + ' วัน', birthday: 'เกิดเดือนนี้', no_line: 'ยังไม่ผูก LINE' }[r.type] || '';
+  };
+  const tagChip = (t, removable) => '<span class="tagc ' + esc(t.color) + '">' + (t.kind === 'auto' ? '<span aria-label="อัตโนมัติ" title="ระบบติดให้ตามเงื่อนไข">⚡</span>' : '') + esc(t.name) +
+    (removable && t.kind === 'manual' ? '<button type="button" aria-label="ถอดแท็ก ' + esc(t.name) + '" data-a="untag" data-v="' + t.id + '">×</button>' : '') + '</span>';
+  const avatar = (pic, name, big) => pic ? '<img class="av' + (big ? ' big' : '') + '" alt="" src="' + esc(pic) + '">' : '<span class="av' + (big ? ' big' : '') + '" aria-hidden="true">' + esc(Array.from(String(name || '?'))[0]) + '</span>';
+  const tierPill = (t) => '<span class="tierp ' + t + '">' + (TIER_LABEL[t] || t) + '</span>';
+  const ago = (t) => { if (!t) return '-'; const d = Math.floor((Date.now() - new Date(t)) / 864e5); return d < 1 ? 'น้อยกว่า 1 วัน' : d < 30 ? d + ' วัน' : d < 365 ? Math.floor(d / 30) + ' เดือน' : Math.floor(d / 365) + ' ปี ' + Math.floor((d % 365) / 30) + ' เดือน'; };
+  const when = (t) => (t ? date(t) + ' ' + new Date(t).toTimeString().slice(0, 5) : '-');
+  function membersView() {
+    const res = S.data.members || { rows: [], total: 0, page: 1, size: 10 };
+    const tags = S.data.tags || []; const pages = Math.max(1, Math.ceil(res.total / res.size));
+    const sel = S.member ? S.member.member.id : null;
+    const opt = (list, cur, all) => '<option value="">' + all + '</option>' + list.map((o) => '<option value="' + esc(o[0]) + '"' + (String(cur) === String(o[0]) ? ' selected' : '') + '>' + esc(o[1]) + '</option>').join('');
+    return '<form class="mtop" data-f="msearch" role="search"><div class="srch"><label class="sr" for="mq">ค้นหาสมาชิก</label><input id="mq" name="q" type="search" placeholder="ชื่อ, เบอร์โทร, เลขสมาชิก" value="' + esc(S.mf.q) + '"><button class="btn" aria-label="ค้นหา">ค้นหา</button></div>' +
+        '<select name="tier" aria-label="ระดับ">' + opt(Object.entries(TIER_LABEL), S.mf.tier, 'ทุกระดับ') + '</select>' +
+        '<select name="branch" aria-label="สาขาที่สมัคร">' + opt(brand().branches.map((x) => [x.id, x.name]), S.mf.branch, 'ทุกสาขาที่สมัคร') + '</select>' +
+        '<select name="tag" aria-label="แท็ก">' + opt(tags.map((t) => [t.id, (t.kind === 'auto' ? '⚡ ' : '') + t.name + ' (' + fmt(t.members) + ')']), S.mf.tag, 'แท็กทั้งหมด') + '</select>' +
+        '<span class="sp"></span><button type="button" class="btn ghost" data-a="tagMgr">จัดการแท็ก</button><button type="button" class="btn ghost" data-a="exportMembers">ดาวน์โหลด</button><button type="button" class="btn" data-a="addMember">+ เพิ่มสมาชิก</button></form>' +
+      '<div class="mwrap"><div class="mlist"><div class="wrap"><table class="tbl mtbl"><thead><tr><th>#</th><th>ชื่อ</th><th>เลขสมาชิก</th><th>หมายเหตุ</th><th class="r">แต้ม</th><th>ระดับ</th></tr></thead><tbody>' +
+        (res.rows.length ? res.rows.map((m, i) => '<tr class="' + (m.id === sel ? 'sel' : '') + '" data-a="member" data-v="' + esc(m.id) + '" tabindex="0"><td class="muted">' + ((res.page - 1) * res.size + i + 1) + '</td>' +
+          '<td><div class="mname">' + avatar(m.picture, m.full_name) + '<span><b>' + esc(m.full_name) + '</b>' + (m.tags.length ? '<span class="mtags">' + m.tags.slice(0, 3).map((t) => tagChip(t)).join('') + (m.tags.length > 3 ? '<small class="muted">+' + (m.tags.length - 3) + '</small>' : '') + '</span>' : '') + '</span></div></td>' +
+          '<td class="nowrap muted">' + esc(m.id) + '</td><td class="mnote">' + esc(m.note || '-') + '</td><td class="r num">' + fmt(m.points) + '</td><td>' + tierPill(m.tier) + '</td></tr>').join('')
+          : '<tr><td colspan="6" class="muted" style="text-align:center;padding:24px">ไม่พบสมาชิก</td></tr>') +
+        '</tbody></table></div><div class="pager"><button class="btn ghost sm" data-a="mpage" data-v="1"' + (res.page <= 1 ? ' disabled' : '') + ' aria-label="หน้าแรก">«</button><button class="btn ghost sm" data-a="mpage" data-v="' + (res.page - 1) + '"' + (res.page <= 1 ? ' disabled' : '') + ' aria-label="ก่อนหน้า">‹</button>' +
+        '<span>หน้า <b>' + res.page + '</b> / ' + pages + ' · ทั้งหมด ' + fmt(res.total) + ' คน</span><button class="btn ghost sm" data-a="mpage" data-v="' + (res.page + 1) + '"' + (res.page >= pages ? ' disabled' : '') + ' aria-label="ถัดไป">›</button><button class="btn ghost sm" data-a="mpage" data-v="' + pages + '"' + (res.page >= pages ? ' disabled' : '') + ' aria-label="หน้าสุดท้าย">»</button></div></div>' +
+      '<aside class="mdet" aria-label="รายละเอียดสมาชิก">' + (S.member ? memberPanel(S.member) : '<p class="muted" style="text-align:center;padding:40px 0">เลือกสมาชิกจากรายการเพื่อดูรายละเอียด</p>') + '</aside></div>';
+  }
+  function memberPanel(d) {
+    const m = d.member; const x = d.extra || {}; const w = d.wallets[S.brand] || { balance: 0, tier: {} }; const t = w.tier || {};
     const coupons = d.coupons.filter((c) => c.status === 'ready' && (c.brand === 'all' || c.brand === S.brand));
-    return '<div class="card"><div class="hd"><h2>' + esc(m.full_name) + ' · ' + esc(m.id) + '</h2>' + (S.staff.role === 'super' ? '<button class="btn danger sm" data-a="delMember" data-v="' + esc(m.id) + '">ลบสมาชิก</button>' : '') + '<button class="btn ghost sm" data-a="unmember">ปิด</button></div>' +
-      '<div class="kpis"><div class="kpi"><small class="muted">แต้ม ' + esc(brand().short_name) + '</small><b class="num">' + fmt(w.balance) + '</b><small class="muted">ระดับ ' + esc(w.tier.name || '-') + '</small></div>' +
-      '<div class="kpi"><small class="muted">เบอร์</small><b style="font-size:17px">' + esc(m.phone) + '</b><small class="muted">สมัคร ' + date(m.created_at) + '</small></div>' +
-      '<div class="kpi"><small class="muted">คูปองพร้อมใช้</small><b class="num">' + coupons.length + '</b></div></div>' +
-      '<form class="grid" data-f="adjust" data-v="' + esc(m.id) + '"><div class="field"><label for="a-pts">ปรับแต้ม (+ เพิ่ม / - ลด)</label><input id="a-pts" name="points" type="number" required></div>' +
-      '<div class="field" style="grid-column:span 2"><label for="a-why">เหตุผล</label><input id="a-why" name="reason" required placeholder="เช่น ลืมสแกนบิล HL01-000123"></div><div class="actions" style="grid-column:auto"><button class="btn">ส่งขออนุมัติ</button></div></form>' +
-      '<small class="muted">การปรับแต้มต้องให้อีกคนอนุมัติที่เมนู "อนุมัติแต้ม"</small>' +
-      (S.giftable && S.giftable.length ? '<form class="grid" data-f="gift" data-v="' + esc(m.id) + '"><div class="field" style="grid-column:span 2"><label for="g-tpl">มอบคูปองให้สมาชิกคนนี้</label><select id="g-tpl" name="templateId"><option value="">เลือกคูปอง</option>' +
-        S.giftable.map((t) => '<option value="' + t.id + '">' + esc((KIND_NAME[t.kind] || '') + ' · ' + t.title) + '</option>').join('') + '</select></div><div class="actions" style="grid-column:auto"><button class="btn">มอบคูปอง</button></div></form>' : '') +
-      (coupons.length ? '<small class="muted">คูปองพร้อมใช้: ' + coupons.map((c) => esc(c.title) + ' (' + esc(c.code) + ')').join(', ') + '</small>' : '') +
-      '<h3 style="font-size:15px">ประวัติแต้มล่าสุด</h3><div class="wrap"><table class="tbl"><tbody>' +
-      d.ledger.filter((l) => l.brand_id === S.brand).slice(0, 15).map((l) => '<tr><td>' + date(l.created_at) + '</td><td>' + esc(l.note || l.entry_type) + '</td><td class="r num" style="color:' + (l.points >= 0 ? 'var(--good)' : 'var(--bad)') + '">' + (l.points >= 0 ? '+' : '') + fmt(l.points) + '</td><td class="r num">' + fmt(l.balance_after) + '</td></tr>').join('') +
-      '</tbody></table></div></div>';
+    const link = (d.links || []).find((l) => l.brand_id === S.brand) || {};
+    const branchName = (id) => (brand().branches.find((b) => b.id === id) || {}).name || id || '-';
+    const manualTags = (S.data.tags || []).filter((tg) => tg.kind === 'manual' && !(x.tags || []).some((y) => y.id === tg.id));
+    const tab = (k, label) => '<button type="button" role="tab" aria-selected="' + (S.mtab === k) + '" data-a="mtab" data-v="' + k + '">' + label + '</button>';
+    const kv = (k, v) => '<span>' + k + '</span><span>' + v + '</span>';
+    let body = '';
+    if (S.mtab === 'm') {
+      body = '<div class="kvx">' +
+        kv('หมายเหตุ', '<form data-f="mnote" class="mnote-f"><label class="sr" for="m-note">หมายเหตุ</label><textarea id="m-note" name="note" maxlength="500" rows="2" placeholder="เช่น แพ้ถั่ว · ชอบนั่งริมหน้าต่าง">' + esc(x.note || '') + '</textarea><button class="btn ghost sm">บันทึก</button></form>') +
+        kv('คูปองคงเหลือ', '<b class="n">' + coupons.length + '</b> คูปอง' + (coupons.length ? '<small class="muted"> · ' + coupons.slice(0, 3).map((c) => esc(c.title)).join(', ') + (coupons.length > 3 ? ' …' : '') + '</small>' : '')) +
+        kv('แต้มคงเหลือ', '<b class="n">' + fmt(w.balance) + '</b> แต้ม') +
+        kv('แต้มใกล้หมดอายุ', '<b class="n">' + fmt(x.expiring30 || 0) + '</b> แต้ม <small class="muted">(ภายใน 30 วัน)</small>') +
+        kv('สะสม 12 เดือน', fmt(t.at || 0) + ' / ' + fmt(t.max || 0) + ' แต้ม' + (t.next ? ' <small class="muted">(อีก ' + fmt(t.need) + ' ขึ้น ' + esc(t.next) + ')</small>' : '')) +
+        kv('มาซื้อทั้งหมด', fmt(x.visits || 0) + ' บิล · ' + fmt(x.spend || 0) + ' บาท') +
+        kv('เป็นสมาชิกมา', ago(m.created_at)) + kv('สาขาที่สมัคร', esc(branchName(m.home_branch_id))) + kv('ใช้งานล่าสุด', when(x.last_active)) + '</div>' +
+        (S.giftable && S.giftable.length ? '<form class="minline" data-f="gift" data-v="' + esc(m.id) + '"><label for="g-tpl">มอบคูปอง</label><select id="g-tpl" name="templateId"><option value="">เลือกคูปอง</option>' +
+          S.giftable.map((tp) => '<option value="' + tp.id + '">' + esc((KIND_NAME[tp.kind] || '') + ' · ' + tp.title) + '</option>').join('') + '</select><button class="btn sm">มอบ</button></form>' : '') +
+        '<form class="minline" data-f="adjust" data-v="' + esc(m.id) + '"><label for="a-pts">ปรับแต้ม</label><input id="a-pts" name="points" type="number" required placeholder="+50 / -20" style="width:96px"><input name="reason" required placeholder="เหตุผล" aria-label="เหตุผล" style="flex:1;min-width:120px"><button class="btn sm">ส่งขออนุมัติ</button></form>';
+    } else if (S.mtab === 'i') {
+      body = '<div class="kvx">' + kv('ชื่อ - นามสกุล', esc(m.full_name)) + kv('เบอร์โทร', esc(m.phone)) + kv('วันเกิด', m.birth_date ? date(String(m.birth_date).slice(0, 10) + 'T12:00:00+07:00') : '-') +
+        kv('LINE', x.has_line ? 'ผูกแล้ว' + (link.follow_status === 'follow' ? ' · เป็นเพื่อน OA' : link.follow_status === 'blocked' ? ' · บล็อก OA' : '') : '<span class="pill warn">ยังไม่ผูก</span>') +
+        kv('รับข่าวสาร', link.marketing_consent ? 'ยินยอม' : 'ไม่ยินยอม') + kv('สมัครเมื่อ', when(m.created_at)) + kv('เลขสมาชิก', esc(m.id)) + '</div>' +
+        (S.staff.role === 'super' ? '<div style="margin-top:14px"><button class="btn danger sm" data-a="delMember" data-v="' + esc(m.id) + '">ลบสมาชิก</button></div>' : '');
+    } else {
+      const items = [];
+      d.bills.filter((b) => b.brand_id === S.brand).forEach((b) => items.push({ t: b.paid_at, k: 'bills', title: 'บิล ' + b.pos_bill_id + ' · ' + branchName(b.branch_id), sub: fmt(b.total) + ' บาท' + (Number(b.discount) ? ' · ส่วนลด ' + fmt(b.discount) : '') + (b.status !== 'paid' ? ' · ' + b.status : ''), v: '<span class="plus">+' + fmt(b.points_earned) + '</span>' }));
+      d.ledger.filter((l) => l.brand_id === S.brand && l.entry_type !== 'earn').forEach((l) => items.push({ t: l.created_at, k: 'points', title: l.note || l.entry_type, sub: 'แต้ม', v: '<span class="' + (l.points >= 0 ? 'plus' : 'minus') + '">' + (l.points > 0 ? '+' : '') + fmt(l.points) + '</span>' }));
+      d.coupons.filter((c) => c.brand === S.brand || c.brand === 'all').forEach((c) => {
+        items.push({ t: c.issuedAt, k: 'coupons', title: 'ได้คูปอง ' + c.title, sub: c.code, v: '<span class="muted">คูปอง</span>' });
+        if (c.usedAt) items.push({ t: c.usedAt, k: 'coupons', title: 'ใช้คูปอง ' + c.title, sub: c.code, v: '<span class="muted">ใช้แล้ว</span>' });
+      });
+      items.sort((a, b) => new Date(b.t) - new Date(a.t));
+      const list = items.filter((it) => S.actf === 'all' || it.k === S.actf).slice(0, 60);
+      body = '<div class="chips" role="group" aria-label="กรองกิจกรรม">' + [['all', 'ทั้งหมด'], ['bills', 'บิล'], ['points', 'แต้ม'], ['coupons', 'คูปอง']].map((f) => '<button type="button" data-a="actf" data-v="' + f[0] + '" aria-pressed="' + (S.actf === f[0]) + '">' + f[1] + '</button>').join('') + '</div>' +
+        (list.length ? '<div class="act">' + list.map((it) => '<div class="r"><span>' + esc(it.title) + '<small>' + when(it.t) + ' · ' + esc(it.sub) + '</small></span>' + it.v + '</div>').join('') + '</div>' : '<p class="muted">ยังไม่มีกิจกรรม</p>');
+    }
+    return '<div class="mhd">' + avatar(x.picture, m.full_name, true) + '<div style="flex:1;min-width:0"><div class="nm">' + esc(m.full_name) + '</div><div class="sub">' + esc(m.id) + ' · ' + esc(m.phone) + '</div></div>' + tierPill(t.name || 'SILVER') + '</div>' +
+      '<div class="mtagrow">' + (x.tags || []).map((tg) => tagChip(tg, true)).join('') +
+        (S.tagPick ? '<form class="tagpick" data-f="mtag"><label class="sr" for="tp-sel">เลือกแท็ก</label><select id="tp-sel" name="tagId"><option value="">' + (manualTags.length ? 'เลือกแท็ก…' : 'ยังไม่มีแท็กให้เลือก') + '</option>' + manualTags.map((tg) => '<option value="' + tg.id + '">' + esc(tg.name) + '</option>').join('') + '</select>' +
+          '<input name="newName" maxlength="40" placeholder="หรือพิมพ์แท็กใหม่" aria-label="ชื่อแท็กใหม่"><button class="btn sm">ติดแท็ก</button><button type="button" class="btn ghost sm" data-a="tagPick">ยกเลิก</button></form>'
+          : '<button type="button" class="tagadd" data-a="tagPick">+ เพิ่มแท็ก</button>') + '</div>' +
+      '<div class="tabs3" role="tablist">' + tab('m', 'การเป็นสมาชิก') + tab('i', 'ข้อมูล') + tab('a', 'กิจกรรม') + '</div>' + body;
+  }
+  function addMemberForm() {
+    return '<form class="grid" data-f="newMember">' +
+      '<div class="field" style="grid-column:1/-1"><label for="nm-name">ชื่อ - นามสกุล</label><input id="nm-name" name="name" required maxlength="100" data-autofocus></div>' +
+      '<div class="field"><label for="nm-phone">เบอร์โทร</label><input id="nm-phone" name="phone" required inputmode="tel" maxlength="12" placeholder="0812345678"></div>' +
+      '<div class="field"><label for="nm-bd">วันเกิด</label><input id="nm-bd" name="birthday" type="date"></div>' +
+      '<div class="field" style="grid-column:1/-1"><label for="nm-br">สาขาที่สมัคร</label><select id="nm-br" name="branchId">' + brand().branches.map((b) => '<option value="' + esc(b.id) + '">' + esc(b.name) + '</option>').join('') + '</select></div>' +
+      '<label class="check" style="grid-column:1/-1"><input type="checkbox" name="marketing">ลูกค้ายินดีรับข่าวสารและโปรโมชั่นทาง LINE</label>' +
+      '<label class="check" style="grid-column:1/-1"><input type="checkbox" name="consent" required>ลูกค้ายอมรับเงื่อนไขสมาชิกและนโยบายความเป็นส่วนตัวแล้ว</label>' +
+      '<small class="muted" style="grid-column:1/-1">ได้แต้มและคูปองต้อนรับเหมือนสมัครผ่าน LINE · ลูกค้าสะสมแต้มที่ร้านด้วยเบอร์โทรได้ทันที</small>' +
+      '<div class="err" id="c-err" role="alert" hidden></div><div class="actions"><button class="btn">เพิ่มสมาชิก</button><button type="button" class="btn ghost" data-a="close">ยกเลิก</button></div></form>';
+  }
+  function tagManager() {
+    const tags = S.data.tags || []; const e = S.edit.tag || { kind: 'manual', color: 'blue', rule: { type: 'new', days: 30 } };
+    const r = e.rule || { type: 'new', days: 30 };
+    return '<div class="tagmgr"><div><h3 class="h3">แท็กทั้งหมด (' + tags.length + ')</h3>' +
+      (tags.length ? '<div class="wrap"><table class="tbl"><thead><tr><th>แท็ก</th><th>เงื่อนไข</th><th class="r">สมาชิก</th><th></th></tr></thead><tbody>' + tags.map((t) => '<tr><td>' + tagChip(t) + (t.description ? '<br><small class="muted">' + esc(t.description) + '</small>' : '') + '</td>' +
+        '<td>' + (t.kind === 'auto' ? '⚡ ' + esc(ruleText(t.rule)) : 'พนักงานติดเอง') + '</td><td class="r num"><button class="linkb" data-a="tagFilter" data-v="' + t.id + '">' + fmt(t.members) + '</button></td>' +
+        '<td class="r nowrap"><button class="btn ghost sm" data-a="tagEdit" data-v="' + t.id + '">แก้ไข</button> <button class="btn ghost sm" data-a="tagDel" data-v="' + t.id + '">ลบ</button></td></tr>').join('') + '</tbody></table></div>'
+        : '<p class="muted">ยังไม่มีแท็ก สร้างแท็กแรกทางขวา</p>') + '</div>' +
+      '<form class="grid tagform" data-f="tag" data-v="' + (e.id || '') + '"><h3 class="h3" style="grid-column:1/-1">' + (e.id ? 'แก้ไขแท็ก' : 'สร้างแท็กใหม่') + '</h3>' +
+        '<div class="field" style="grid-column:1/-1"><label for="tg-name">ชื่อแท็ก</label><input id="tg-name" name="name" required maxlength="40" value="' + esc(e.name || '') + '" placeholder="เช่น ลูกค้าประจำ, สายไก่ทอด, ลูกค้าองค์กร"></div>' +
+        '<fieldset class="field" style="grid-column:1/-1"><legend>สี</legend><div class="rw-inline">' + TAG_COLORS.map((c) => '<label class="check"><input type="radio" name="color" value="' + c[0] + '"' + (e.color === c[0] ? ' checked' : '') + '><span class="tagc ' + c[0] + '">' + c[1] + '</span></label>').join('') + '</div></fieldset>' +
+        '<fieldset class="field" style="grid-column:1/-1"><legend>ประเภท</legend><div class="segr">' + [['manual', 'พนักงานติดเอง'], ['auto', '⚡ อัตโนมัติตามเงื่อนไข']].map((k) => '<label><input type="radio" name="kind" value="' + k[0] + '"' + (e.kind === k[0] ? ' checked' : '') + (e.id ? ' disabled' : '') + '><span>' + k[1] + '</span></label>').join('') + '</div></fieldset>' +
+        '<div class="field" data-tk="auto" style="grid-column:1/-1"><label for="tg-rule">เงื่อนไข</label><select id="tg-rule" name="ruleType">' + AUTO_RULES.map((o) => '<option value="' + o[0] + '"' + (r.type === o[0] ? ' selected' : '') + '>' + o[1] + '</option>').join('') + '</select></div>' +
+        '<div class="field" data-tk="auto" data-rt="count"><label for="tg-count">จำนวนบิล (N)</label><input id="tg-count" name="count" type="number" min="1" value="' + esc(r.count || 4) + '"></div>' +
+        '<div class="field" data-tk="auto" data-rt="amount"><label for="tg-amt">ยอดซื้อ (บาท)</label><input id="tg-amt" name="amount" type="number" min="1" value="' + esc(r.amount || 2000) + '"></div>' +
+        '<div class="field" data-tk="auto" data-rt="days"><label for="tg-days">ช่วงเวลา (วัน)</label><input id="tg-days" name="days" type="number" min="1" value="' + esc(r.days || 30) + '"></div>' +
+        '<div class="field" style="grid-column:1/-1"><label for="tg-desc">คำอธิบาย (ไม่บังคับ)</label><input id="tg-desc" name="description" maxlength="200" value="' + esc(e.description || '') + '" placeholder="ใช้ทำอะไร เช่น กลุ่มส่งโปรวันเกิด"></div>' +
+        '<small class="muted" style="grid-column:1/-1">แท็กอัตโนมัติ: ระบบคำนวณใหม่ทุกครั้งที่เปิดดู ใช้กรองรายชื่อและดาวน์โหลดไปทำข้อมูลได้</small>' +
+        '<div class="err" id="c-err" role="alert" hidden></div><div class="actions"><button class="btn">' + (e.id ? 'บันทึก' : 'สร้างแท็ก') + '</button>' + (e.id ? '<button type="button" class="btn ghost" data-a="tagNew">สร้างใหม่แทน</button>' : '') + '<button type="button" class="btn ghost" data-a="close">ปิด</button></div></form></div>';
+  }
+  function syncTagForm(el) {
+    const kind = (el.querySelector('input[name="kind"]:checked') || {}).value || 'manual';
+    const rt = el.elements.ruleType ? el.elements.ruleType.value : '';
+    const need = { new: ['days'], inactive: ['days'], visits: ['count', 'days'], spend: ['amount', 'days'], birthday: [], no_line: [] }[rt] || [];
+    el.querySelectorAll('[data-tk]').forEach((x) => { x.hidden = kind !== 'auto' || (x.dataset.rt && !need.includes(x.dataset.rt)); });
+  }
+  async function exportMembers() {
+    const res = await api('GET', '/api/admin/members?' + memberQs({ all: 1 }));
+    const cols = ['เลขสมาชิก', 'ชื่อ', 'เบอร์โทร', 'ระดับ', 'แต้มคงเหลือ', 'แต้มสะสม 12 เดือน', 'แท็ก', 'หมายเหตุ', 'สาขาที่สมัคร', 'วันเกิด', 'สมัครเมื่อ', 'ใช้งานล่าสุด'];
+    const cell = (v) => { const t = String(v == null ? '' : v); return /[",\n]/.test(t) ? '"' + t.replace(/"/g, '""') + '"' : t; };
+    const day = (t) => (t ? new Date(t).toISOString().slice(0, 10) : '');
+    const rows = res.rows.map((m) => [m.id, m.full_name, m.phone, TIER_LABEL[m.tier], m.points, m.earned, m.tags.map((t) => t.name).join('; '), m.note || '', (brand().branches.find((b) => b.id === m.home_branch_id) || {}).name || '', m.birth_date ? String(m.birth_date).slice(0, 10) : '', day(m.created_at), day(m.last_active)]);
+    const csv = '﻿' + [cols, ...rows].map((r) => r.map(cell).join(',')).join('\r\n');
+    const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
+    a.download = 'members-' + S.brand + '-' + new Date().toISOString().slice(0, 10) + '.csv'; document.body.appendChild(a); a.click(); a.remove();
+    toast('ดาวน์โหลด ' + fmt(res.rows.length) + ' คน' + (res.total > res.rows.length ? ' (สูงสุด 5,000 คน)' : ''));
   }
 
   function approvalsView() {
@@ -527,7 +637,9 @@
     if (e.kind === 'staff') { title = e.id ? 'แก้ไขผู้ใช้ ' + e.id : 'เพิ่มผู้ใช้'; body = staffForm(e.id); }
     if (e.kind === 'branch') { title = e.id ? 'แก้ไขสาขา ' + e.id : 'เพิ่มสาขา · ' + brand().name; body = branchForm(e.id); }
     if (e.kind === 'staffpw') { title = 'ตั้งรหัสผ่านใหม่ให้ ' + e.id; body = staffPwForm(e.id); }
-    return '<div class="scrim" data-a="close"></div><div class="dialog' + (e.kind === 'coupon' || e.kind === 'reward' ? ' wide' : '') + '" role="dialog" aria-modal="true" aria-label="' + esc(title) + '"><h2>' + esc(title) + '</h2>' + body + '</div>';
+    if (e.kind === 'newMember') { title = 'เพิ่มสมาชิก · ' + brand().name; body = addMemberForm(); }
+    if (e.kind === 'tags') { title = 'จัดการแท็กสมาชิก · ' + brand().name; body = tagManager(); }
+    return '<div class="scrim" data-a="close"></div><div class="dialog' + (e.kind === 'coupon' || e.kind === 'reward' || e.kind === 'tags' ? ' wide' : '') + '" role="dialog" aria-modal="true" aria-label="' + esc(title) + '"><h2>' + esc(title) + '</h2>' + body + '</div>';
   }
 
   /* ---------- การกด ---------- */
@@ -583,7 +695,23 @@
     backHome: () => render(),
     editStaff: (v) => { S.edit = { kind: 'staff', id: v || null }; S.err = ''; render(); },
     staffPw: (v) => { S.edit = { kind: 'staffpw', id: v }; S.err = ''; render(); },
-    member: async (v) => { await openMember(v); render(); window.scrollTo(0, 0); },
+    member: async (v) => { await openMember(v); S.tagPick = false; render(); },
+    mpage: async (v) => { S.mf.page = Math.max(1, parseInt(v, 10) || 1); await load(); },
+    mtab: (v) => { S.mtab = v; render(); },
+    actf: (v) => { S.actf = v; render(); },
+    tagPick: () => { S.tagPick = !S.tagPick; render(); const f = document.querySelector('form[data-f="mtag"] select'); if (f) f.focus(); },
+    untag: async (v) => { await api('DELETE', '/api/admin/members/' + encodeURIComponent(S.member.member.id) + '/tags/' + v); await load(); },
+    addMember: () => { S.edit = { kind: 'newMember' }; S.err = ''; render(); },
+    tagMgr: () => { S.edit = { kind: 'tags' }; S.err = ''; render(); },
+    tagNew: () => { S.edit = { kind: 'tags' }; render(); },
+    tagEdit: (v) => { S.edit = { kind: 'tags', tag: (S.data.tags || []).find((t) => String(t.id) === String(v)) }; render(); },
+    tagDel: async (v) => {
+      const t = (S.data.tags || []).find((x) => String(x.id) === String(v));
+      if (!confirm('ลบแท็ก "' + t.name + '"?' + (t.kind === 'manual' && t.members ? '\nแท็กนี้จะถูกถอดออกจากสมาชิก ' + t.members + ' คน' : ''))) return;
+      await api('DELETE', '/api/admin/tags/' + v); if (String(S.mf.tag) === String(v)) S.mf.tag = ''; S.edit = { kind: 'tags' }; toast('ลบแท็กแล้ว'); await load();
+    },
+    tagFilter: async (v) => { S.mf = { q: '', tier: '', branch: '', tag: String(v), page: 1 }; S.edit = null; await load(); },
+    exportMembers: () => exportMembers(),
     unmember: () => { S.member = null; render(); },
     decide: async (v) => {
       const [id, d] = v.split(':');
@@ -657,6 +785,27 @@
       S.edit = null; toast('ตั้งรหัสผ่านแล้ว'); await load();
     },
     search: async (o) => { S.q = o.q; S.member = null; await load(); },
+    msearch: async (o) => { S.mf = { q: o.q, tier: o.tier, branch: o.branch, tag: o.tag, page: 1 }; await load(); },
+    mnote: async (o) => { await api('PUT', '/api/admin/members/' + encodeURIComponent(S.member.member.id) + '/note', { brand: S.brand, note: o.note }); toast('บันทึกหมายเหตุแล้ว'); await load(); },
+    mtag: async (o) => {
+      let id = o.tagId;
+      if (!id && o.newName) id = (await api('POST', '/api/admin/tags', { brand: S.brand, name: o.newName })).id;
+      if (!id) throw new Error('เลือกแท็ก หรือพิมพ์ชื่อแท็กใหม่');
+      await api('POST', '/api/admin/members/' + encodeURIComponent(S.member.member.id) + '/tags', { tagId: id }); S.tagPick = false; await load();
+    },
+    newMember: async (o) => {
+      if (!o.consent) throw new Error('ต้องได้รับความยินยอมจากลูกค้าก่อน');
+      const r = await api('POST', '/api/admin/members', { brand: S.brand, name: o.name, phone: o.phone, birthday: o.birthday || null, branchId: o.branchId, marketing: o.marketing, consent: true });
+      S.edit = null; toast('เพิ่มสมาชิก ' + r.id + ' แล้ว' + (r.welcomePoints ? ' · ได้ ' + r.welcomePoints + ' แต้มต้อนรับ' : ''));
+      S.mf = { q: r.id, tier: '', branch: '', tag: '', page: 1 }; await openMember(r.id); await load();
+    },
+    tag: async (o, id, el) => {
+      const kind = (el.querySelector('input[name="kind"]:checked') || {}).value || 'manual';
+      const body = { brand: S.brand, name: o.name, color: (el.querySelector('input[name="color"]:checked') || {}).value, kind, description: o.description,
+        rule: kind === 'auto' ? { type: o.ruleType, days: o.days, count: o.count, amount: o.amount } : null };
+      if (id) await api('PATCH', '/api/admin/tags/' + id, body); else await api('POST', '/api/admin/tags', body);
+      toast(id ? 'บันทึกแท็กแล้ว' : 'สร้างแท็กแล้ว'); S.edit = { kind: 'tags' }; await load();
+    },
     adjust: async (o, id) => {
       await api('POST', '/api/admin/point-adjustments', { memberId: id, brand: S.brand, points: o.points, reason: o.reason });
       toast('ส่งคำขอปรับแต้มแล้ว รออีกคนอนุมัติ'); await openMember(id); render();
@@ -687,6 +836,12 @@
     guard(() => fn(form(el), el.dataset.v, el), true);
   });
   document.addEventListener('input', (e) => { const f = e.target.closest && e.target.closest('form[data-f="coupon"]'); if (f) syncCoupon(f); });
+  document.addEventListener('change', (e) => {
+    const ms = e.target.closest && e.target.closest('form[data-f="msearch"]');
+    if (ms && e.target.tagName === 'SELECT') ms.requestSubmit();
+    const tf = e.target.closest && e.target.closest('form[data-f="tag"]'); if (tf) syncTagForm(tf);
+  });
+  document.addEventListener('keydown', (e) => { if (e.key === 'Enter' && e.target.matches && e.target.matches('tr[data-a="member"]')) e.target.click(); });
   document.addEventListener('change', async (e) => {
     const f = e.target.closest && e.target.closest('form[data-f="reward"]'); if (!f) return;
     syncReward(f);
