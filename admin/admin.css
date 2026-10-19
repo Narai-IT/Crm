@@ -136,3 +136,15 @@ details.adv[open] > *:not(summary) { margin-bottom: 12px; }
 .prev-sec .kv { display: flex; justify-content: space-between; gap: 8px; color: var(--muted); }
 .prev-sec .kv span:last-child { color: var(--ink); text-align: right; }
 @media (max-width: 860px) { .coupon-ed { grid-template-columns: 1fr; } .ed-prev { position: static; } }
+
+/* กฎแต้ม: แบ่งหมวด หัวข้อซ้าย ช่องกรอกขวา */
+.card.rules { max-width: 1080px; }
+.rsec { display: grid; grid-template-columns: 220px 1fr; gap: 12px 24px; padding: 18px 0; border-top: 1px solid var(--line); }
+.card.rules h2 + .rsec { border-top: 0; padding-top: 6px; }
+.rsec-h h3 { margin: 0 0 4px; font-size: 15px; }
+.rsec-h small { display: block; line-height: 1.5; }
+.rgrid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px 16px; align-items: start; }
+.rgrid .check { min-height: 40px; margin-top: 23px; }
+.rules-foot { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; border-top: 1px solid var(--line); padding-top: 16px; }
+@media (max-width: 1000px) { .rsec { grid-template-columns: 1fr; } }
+@media (max-width: 640px) { .rgrid { grid-template-columns: repeat(2, minmax(0, 1fr)); } .rgrid .check { grid-column: 1 / -1; margin-top: 0; } }
