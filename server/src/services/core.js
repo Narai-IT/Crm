@@ -220,6 +220,12 @@ export async function register(db, f) {
     return { member: existing, linked: true };
   }
 
+  return createMember(db, f, brand, ok);
+}
+
+// สร้างสมาชิกใหม่ + แต้ม/คูปองต้อนรับ · ใช้ทั้งสมัครผ่าน LINE (f.lineUserId) และพนักงานเพิ่มจากหลังบ้าน (ไม่มี LINE)
+// ลูกค้าที่พนักงานเพิ่มให้ มาสมัครผ่าน LINE ด้วยเบอร์เดิม + OTP ภายหลัง → ผูก LINE กับบัญชีนี้ (ดู register)
+async function createMember(db, f, brand, verified) {
   const no = (await db.one("SELECT nextval('member_no') AS n")).n;
   const id = memberIdOf(no);
   let home = f.branchId ? await db.one('SELECT id FROM branches WHERE id = $1 AND brand_id = $2', [f.branchId, f.brandId]) : null;
@@ -227,9 +233,11 @@ export async function register(db, f) {
   const m = await db.one(
     `INSERT INTO members (id, full_name, phone, phone_verified_at, birth_date, home_branch_id, joined_brand_id, privacy_accepted_at, privacy_version)
      VALUES ($1,$2,$3, $8, $4, $5, $6, now(), $7) RETURNING *`,
-    [id, f.name, f.phone, f.birthday || null, home ? home.id : null, f.brandId, f.privacyVersion || '2026-01', ok ? new Date() : null]);
-  await db.q('INSERT INTO member_line_identities (line_user_id, member_id, display_name) VALUES ($1,$2,$3)', [f.lineUserId, id, f.displayName || null]);
-  await syncFollowLinks(db, id, f.lineUserId);
+    [id, f.name, f.phone, f.birthday || null, home ? home.id : null, f.brandId, f.privacyVersion || '2026-01', verified ? new Date() : null]);
+  if (f.lineUserId) {
+    await db.q('INSERT INTO member_line_identities (line_user_id, member_id, display_name) VALUES ($1,$2,$3)', [f.lineUserId, id, f.displayName || null]);
+    await syncFollowLinks(db, id, f.lineUserId);
+  }
   await setConsent(db, id, f.brandId, !!f.marketing);
 
   const rule = await currentRule(db, f.brandId);
@@ -248,9 +256,19 @@ export async function register(db, f) {
       coupon = coupon || c; titles.push(t.title);
     } catch (e) { if (e.code !== 'coupon_sold_out') throw e; }
   }
-  await queueMessage(db, { brandId: f.brandId, lineUserId: f.lineUserId, kind: 'welcome', data: { memberId: id, pts: welcomePts, coupon: titles.length ? titles.join(', ') : null } });
-  await audit(db, { type: 'member', id }, 'register', { type: 'member', id }, 'สมัครผ่าน OA ' + brand.short_name);
+  if (f.lineUserId) await queueMessage(db, { brandId: f.brandId, lineUserId: f.lineUserId, kind: 'welcome', data: { memberId: id, pts: welcomePts, coupon: titles.length ? titles.join(', ') : null } });
+  if (f.staff) await audit(db, { type: 'staff', id: f.staff.id, name: f.staff.name }, 'add_member', { type: 'member', id }, 'เพิ่มสมาชิกจากหลังบ้าน ' + brand.short_name);
+  else await audit(db, { type: 'member', id }, 'register', { type: 'member', id }, 'สมัครผ่าน OA ' + brand.short_name);
   return { member: m, linked: false, welcomePoints: welcomePts, coupon };
+}
+
+// พนักงานเพิ่มสมาชิกเอง (ลูกค้ายินยอมที่หน้าร้าน) · เบอร์ซ้ำ = บอกเลขสมาชิกเดิม ไม่สร้างซ้ำ
+export async function registerByStaff(db, f) {
+  const brand = await db.one('SELECT * FROM brands WHERE id = $1 AND is_active', [f.brandId]);
+  if (!brand) throw bad('brand_invalid', 'ไม่พบแบรนด์');
+  const existing = await db.one("SELECT id FROM members WHERE phone = $1 AND status = 'active'", [f.phone]);
+  if (existing) throw conflict('phone_exists', 'เบอร์นี้เป็นสมาชิกอยู่แล้ว (' + existing.id + ')');
+  return createMember(db, { ...f, lineUserId: null, privacyVersion: 'staff:' + f.staff.id }, brand, false);
 }
 
 export async function setConsent(db, memberId, brandId, marketing) {

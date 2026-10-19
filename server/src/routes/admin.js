@@ -1,6 +1,6 @@
 // API หลังบ้าน · ตรวจตำแหน่ง + ขอบเขตแบรนด์/สาขาทุกครั้งฝั่ง server
 import { q, one, tx } from '../db.js';
-import { bad, notFound, HttpError } from '../http.js';
+import { bad, notFound, conflict, HttpError } from '../http.js';
 import { staffUser, loadStaff, requirePage, requireBrand, scopeBrands, ROLE_PAGES, ROLE_NAMES, ROLE_SCOPE, ensureDefaultAdmin } from '../auth.js';
 import { checkPassword, hashPassword, signToken, maskPhone } from '../util.js';
 import * as core from '../services/core.js';
@@ -168,6 +168,76 @@ export function audienceSql(segment) {
   return base + seg;
 }
 
+/* ---------------- สมาชิก: ขอบเขต แท็ก ---------------- */
+// สมาชิกของแบรนด์ ($1) = สมัครที่แบรนด์นี้ หรือเคยผูก/มีแต้มกับแบรนด์นี้
+const MEMBER_SCOPE = `(m.joined_brand_id = $1 OR EXISTS (SELECT 1 FROM member_brand_links k WHERE k.member_id = m.id AND k.brand_id = $1)
+  OR EXISTS (SELECT 1 FROM point_ledger l WHERE l.member_id = m.id AND l.brand_id = $1))`;
+const MEMBER_COLS = `m.id, m.full_name, m.phone, m.created_at, m.home_branch_id, m.birth_date,
+  COALESCE((SELECT balance FROM wallets w WHERE w.member_id = m.id AND w.brand_id = $1), 0)::int AS points,
+  COALESCE((SELECT sum(points) FROM point_ledger l WHERE l.member_id = m.id AND l.brand_id = $1 AND l.points > 0 AND l.entry_type <> 'merge' AND l.created_at > now() - interval '365 days'), 0)::int AS earned,
+  (SELECT note FROM member_notes n WHERE n.member_id = m.id AND n.brand_id = $1) AS note,
+  (SELECT picture_url FROM member_line_identities i WHERE i.member_id = m.id ORDER BY linked_at DESC LIMIT 1) AS picture,
+  GREATEST((SELECT max(paid_at) FROM sales_transactions st WHERE st.member_id = m.id AND st.brand_id = $1),
+           (SELECT max(created_at) FROM point_ledger l WHERE l.member_id = m.id AND l.brand_id = $1)) AS last_active`;
+const BILLS = `sales_transactions st WHERE st.member_id = m.id AND st.brand_id = $1 AND st.status <> 'void'`;
+const int = (v, min, max) => Math.min(max, Math.max(min, parseInt(v, 10) || 0));
+// เงื่อนไข SQL ของแท็กอัตโนมัติ (ตัวเลขผ่าน int() แล้ว จึงใส่ใน SQL ตรงได้) · $1 = แบรนด์
+function autoTagSql(rule) {
+  const r = rule || {};
+  if (r.type === 'new') return `m.created_at > now() - interval '${int(r.days, 1, 3650)} days'`;
+  if (r.type === 'inactive') return `EXISTS (SELECT 1 FROM ${BILLS}) AND NOT EXISTS (SELECT 1 FROM ${BILLS} AND st.paid_at > now() - interval '${int(r.days, 1, 3650)} days')`;
+  if (r.type === 'visits') return `(SELECT count(*) FROM ${BILLS} AND st.paid_at > now() - interval '${int(r.days, 1, 3650)} days') >= ${int(r.count, 1, 10000)}`;
+  if (r.type === 'spend') return `(SELECT COALESCE(sum(st.total), 0) FROM ${BILLS} AND st.paid_at > now() - interval '${int(r.days, 1, 3650)} days') >= ${int(r.amount, 1, 100000000)}`;
+  if (r.type === 'birthday') return `extract(month FROM m.birth_date) = extract(month FROM now() AT TIME ZONE 'Asia/Bangkok')`;
+  if (r.type === 'no_line') return 'NOT EXISTS (SELECT 1 FROM member_line_identities i WHERE i.member_id = m.id)';
+  return 'false';
+}
+const AUTO_TYPES = ['new', 'inactive', 'visits', 'spend', 'birthday', 'no_line'];
+const TAG_COLORS = ['blue', 'green', 'orange', 'red', 'purple', 'gray'];
+function tagFields(b) {
+  const name = String(b.name || '').trim().slice(0, 40);
+  if (!name) throw bad('tag_name_required', 'ใส่ชื่อแท็ก');
+  const kind = b.kind === 'auto' ? 'auto' : 'manual';
+  let rule = null;
+  if (kind === 'auto') {
+    const r = b.rule || {};
+    if (!AUTO_TYPES.includes(r.type)) throw bad('tag_rule_invalid', 'เลือกเงื่อนไขของแท็กอัตโนมัติ');
+    rule = { type: r.type };
+    if (['new', 'inactive', 'visits', 'spend'].includes(r.type)) rule.days = int(r.days, 1, 3650) || 30;
+    if (r.type === 'visits') rule.count = int(r.count, 1, 10000) || 1;
+    if (r.type === 'spend') rule.amount = int(r.amount, 1, 100000000) || 1;
+  }
+  return { name, kind, rule, color: TAG_COLORS.includes(b.color) ? b.color : 'blue', description: String(b.description || '').trim().slice(0, 200) };
+}
+// เงื่อนไขกรองสมาชิกตามแท็ก (args = พารามิเตอร์ของคำสั่ง ใส่เพิ่มให้)
+async function tagCond(brand, tagId, args, known) {
+  const t = known || await one('SELECT * FROM tags WHERE id = $1 AND brand_id = $2', [tagId, brand]);
+  if (!t) return 'false';
+  if (t.kind === 'auto') return '(' + autoTagSql(t.rule) + ')';
+  args.push(t.id); return `EXISTS (SELECT 1 FROM member_tags mt WHERE mt.member_id = m.id AND mt.tag_id = $${args.length})`;
+}
+// แท็กของสมาชิกหลายคน (ติดเอง + อัตโนมัติ) → { memberId: [{id,name,color,kind}] }
+async function tagsOf(brand, ids) {
+  const out = {}; if (!ids.length) return out;
+  const tags = await q('SELECT id, name, color, kind, rule FROM tags WHERE brand_id = $1 ORDER BY kind DESC, name', [brand]);
+  const add = (mid, t) => { (out[mid] = out[mid] || []).push({ id: t.id, name: t.name, color: t.color, kind: t.kind }); };
+  const manual = await q('SELECT member_id, tag_id FROM member_tags WHERE member_id = ANY($1)', [ids]);
+  for (const t of tags) {
+    if (t.kind === 'manual') manual.filter((x) => x.tag_id === t.id).forEach((x) => add(x.member_id, t));
+    else (await q(`SELECT m.id FROM members m WHERE m.id = ANY($2) AND ${autoTagSql(t.rule)}`, [brand, ids])).forEach((x) => add(x.id, t));
+  }
+  return out;
+}
+// ข้อมูลเฉพาะแบรนด์ในหน้ารายละเอียดสมาชิก
+async function memberExtra(memberId, brand) {
+  const row = await one(`SELECT ${MEMBER_COLS},
+      COALESCE((SELECT sum(remaining) FROM point_lots p WHERE p.member_id = m.id AND p.brand_id = $1 AND p.remaining > 0 AND p.expires_at < now() + interval '30 days'), 0)::int AS expiring30,
+      (SELECT count(*) FROM ${BILLS})::int AS visits, (SELECT COALESCE(sum(st.total), 0) FROM ${BILLS}) AS spend,
+      EXISTS (SELECT 1 FROM member_line_identities i WHERE i.member_id = m.id) AS has_line
+    FROM members m WHERE m.id = $2`, [brand, memberId]);
+  return { extra: { ...row, phone: undefined, tags: (await tagsOf(brand, [memberId]))[memberId] || [] } };
+}
+
 export default function (r) {
   r.post('/api/admin/login', async (_req, body) => {
     const user = String(body.username || '').trim();
@@ -229,20 +299,107 @@ export default function (r) {
     return { kpi: k, byBrand, branches };
   });
 
+  // รายชื่อสมาชิกของแบรนด์: ค้นหา + กรองระดับ/สาขาที่สมัคร/แท็ก + แบ่งหน้า · all=1 = ทั้งหมด (ดาวน์โหลด สูงสุด 5,000)
   r.get('/api/admin/members', async (req, _b, url) => {
     const s = await staffUser(req); requirePage(s, 'members');
-    const bs = scopeBrands(s, url.searchParams.get('brand'));
-    const term = String(url.searchParams.get('q') || '').trim();
-    const rows = await q(`SELECT m.id, m.full_name, m.phone, m.created_at,
-        (SELECT json_object_agg(w.brand_id, w.balance) FROM wallets w WHERE w.member_id = m.id) AS wallets
-      FROM members m WHERE m.status = 'active' AND EXISTS (SELECT 1 FROM point_ledger l WHERE l.member_id = m.id AND l.brand_id = ANY($1))
-        AND ($2 = '' OR m.id ILIKE '%' || $2 || '%' OR m.full_name ILIKE '%' || $2 || '%' OR m.phone LIKE '%' || $2 || '%')
-      ORDER BY m.created_at DESC LIMIT 200`, [bs, term]);
-    return rows.map((m) => ({ ...m, phone: s.fullPii ? m.phone : maskPhone(m.phone) }));
+    const sp = url.searchParams; const brand = sp.get('brand');
+    requireBrand(s, brand);
+    const all = sp.get('all') === '1';
+    const size = all ? 5000 : Math.min(100, Math.max(5, parseInt(sp.get('size'), 10) || 10));
+    const page = all ? 1 : Math.max(1, parseInt(sp.get('page'), 10) || 1);
+    const rule = await one('SELECT gold_at, platinum_at FROM earn_rules WHERE brand_id = $1 AND effective_to IS NULL', [brand]);
+    const args = [brand]; const where = [];
+    const term = String(sp.get('q') || '').trim();
+    if (term) { args.push(term); where.push(`(m.id ILIKE '%' || $${args.length} || '%' OR m.full_name ILIKE '%' || $${args.length} || '%' OR m.phone LIKE '%' || $${args.length} || '%')`); }
+    if (sp.get('branch')) { args.push(sp.get('branch')); where.push(`m.home_branch_id = $${args.length}`); }
+    if (sp.get('tag')) where.push(await tagCond(brand, parseInt(sp.get('tag'), 10), args));
+    const tier = sp.get('tier'); const g = rule ? rule.gold_at : 0; const pl = rule ? rule.platinum_at : 0;
+    const tierCond = tier === 'SILVER' ? `earned < ${g}` : tier === 'GOLD' ? `earned >= ${g} AND earned < ${pl}` : tier === 'PLATINUM' ? `earned >= ${pl}` : 'true';
+    const rows = await q(`WITH base AS (SELECT ${MEMBER_COLS} FROM members m WHERE m.status = 'active' AND ${MEMBER_SCOPE}${where.length ? ' AND ' + where.join(' AND ') : ''})
+      SELECT *, count(*) OVER()::int AS total FROM base WHERE ${tierCond} ORDER BY created_at DESC LIMIT ${size} OFFSET ${(page - 1) * size}`, args);
+    const tags = await tagsOf(brand, rows.map((r) => r.id));
+    if (all) await core.audit({ q, one }, actor(s), 'export_members', { type: 'brand', id: brand }, 'ดาวน์โหลดรายชื่อสมาชิก ' + rows.length + ' คน');
+    return { total: rows[0] ? rows[0].total : 0, page, size, rows: rows.map((m) => ({ ...m, total: undefined, phone: s.fullPii ? m.phone : maskPhone(m.phone),
+      tier: !rule || m.earned < g ? 'SILVER' : m.earned < pl ? 'GOLD' : 'PLATINUM', tags: tags[m.id] || [] })) };
+  });
+  // พนักงานเพิ่มสมาชิกเอง (ลูกค้ายินยอมที่ร้าน) · ได้แต้ม/คูปองต้อนรับเหมือนสมัครผ่าน LINE
+  r.post('/api/admin/members', async (req, b) => {
+    const s = await staffUser(req); requirePage(s, 'members'); requireBrand(s, b.brand);
+    const name = String(b.name || '').trim().slice(0, 100); const phone = String(b.phone || '').replace(/\D/g, '');
+    if (!name) throw bad('name_required', 'ใส่ชื่อ - นามสกุล');
+    if (!/^0\d{8,9}$/.test(phone)) throw bad('phone_invalid', 'เบอร์โทรต้องเป็นตัวเลข 9-10 หลัก ขึ้นต้นด้วย 0');
+    if (b.birthday && !/^\d{4}-\d{2}-\d{2}$/.test(String(b.birthday))) throw bad('birthday_invalid', 'วันเกิดไม่ถูกต้อง');
+    if (b.consent !== true) throw bad('consent_required', 'ต้องได้รับความยินยอมจากลูกค้าก่อนเพิ่มเป็นสมาชิก');
+    if (b.branchId) await checkBranches(b.brand, [String(b.branchId)]);
+    const res = await tx((db) => core.registerByStaff(db, { brandId: b.brand, name, phone, birthday: b.birthday || null, branchId: b.branchId || null, marketing: !!b.marketing, staff: s }));
+    return { id: res.member.id, welcomePoints: res.welcomePoints };
   });
 
-  r.get('/api/admin/members/:id', async (req, _b, _u, p) => {
+  // หมายเหตุสมาชิก (ต่อแบรนด์) · ว่าง = ลบ
+  r.put('/api/admin/members/:id/note', async (req, b, _u, p) => {
+    const s = await staffUser(req); requirePage(s, 'members'); requireBrand(s, b.brand);
+    const note = String(b.note || '').trim().slice(0, 500);
+    if (!note) await q('DELETE FROM member_notes WHERE member_id = $1 AND brand_id = $2', [p.id, b.brand]);
+    else await q(`INSERT INTO member_notes (member_id, brand_id, note, updated_by) VALUES ($1,$2,$3,$4)
+      ON CONFLICT (member_id, brand_id) DO UPDATE SET note = EXCLUDED.note, updated_by = EXCLUDED.updated_by, updated_at = now()`, [p.id, b.brand, note, s.id]);
+    return { note };
+  });
+
+  // แท็ก: รายการพร้อมจำนวนสมาชิก · สร้าง/แก้/ลบ · ติด/ถอดแท็กแบบพนักงานติดเอง
+  r.get('/api/admin/tags', async (req, _b, url) => {
     const s = await staffUser(req); requirePage(s, 'members');
+    const brand = url.searchParams.get('brand'); requireBrand(s, brand);
+    const list = await q('SELECT * FROM tags WHERE brand_id = $1 ORDER BY kind DESC, name', [brand]);
+    for (const t of list) {
+      const args = [brand];
+      t.members = (await one(`SELECT count(*)::int AS n FROM members m WHERE m.status = 'active' AND ${MEMBER_SCOPE} AND ${await tagCond(brand, t.id, args, t)}`, args)).n;
+    }
+    return list;
+  });
+  r.post('/api/admin/tags', async (req, b) => {
+    const s = await staffUser(req); requirePage(s, 'members'); requireBrand(s, b.brand);
+    const f = tagFields(b);
+    const dup = await one('SELECT id FROM tags WHERE brand_id = $1 AND lower(name) = lower($2)', [b.brand, f.name]);
+    if (dup) throw conflict('tag_exists', 'มีแท็กชื่อนี้แล้ว');
+    const t = await one('INSERT INTO tags (brand_id, name, color, kind, rule, description, created_by) VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *', [b.brand, f.name, f.color, f.kind, f.rule, f.description, s.id]);
+    await core.audit({ q, one }, actor(s), 'create_tag', { type: 'tag', id: String(t.id) }, b.brand + ' · ' + t.name);
+    return t;
+  });
+  r.patch('/api/admin/tags/:id', async (req, b, _u, p) => {
+    const s = await staffUser(req); requirePage(s, 'members');
+    const t = await one('SELECT * FROM tags WHERE id = $1', [parseInt(p.id, 10)]); if (!t) throw notFound('ไม่พบแท็ก'); requireBrand(s, t.brand_id);
+    const f = tagFields({ name: b.name ?? t.name, color: b.color ?? t.color, kind: t.kind, rule: b.rule ?? t.rule, description: b.description ?? t.description });
+    const dup = await one('SELECT id FROM tags WHERE brand_id = $1 AND lower(name) = lower($2) AND id <> $3', [t.brand_id, f.name, t.id]);
+    if (dup) throw conflict('tag_exists', 'มีแท็กชื่อนี้แล้ว');
+    const out = await one('UPDATE tags SET name = $2, color = $3, rule = $4, description = $5 WHERE id = $1 RETURNING *', [t.id, f.name, f.color, f.rule, f.description]);
+    await core.audit({ q, one }, actor(s), 'update_tag', { type: 'tag', id: String(t.id) }, out.name, t, out);
+    return out;
+  });
+  r.del('/api/admin/tags/:id', async (req, _b, _u, p) => {
+    const s = await staffUser(req); requirePage(s, 'members');
+    const t = await one('SELECT * FROM tags WHERE id = $1', [parseInt(p.id, 10)]); if (!t) throw notFound('ไม่พบแท็ก'); requireBrand(s, t.brand_id);
+    await q('DELETE FROM tags WHERE id = $1', [t.id]);
+    await core.audit({ q, one }, actor(s), 'delete_tag', { type: 'tag', id: String(t.id) }, t.name, t);
+    return { deleted: true };
+  });
+  r.post('/api/admin/members/:id/tags', async (req, b, _u, p) => {
+    const s = await staffUser(req); requirePage(s, 'members');
+    const t = await one('SELECT * FROM tags WHERE id = $1', [parseInt(b.tagId, 10)]); if (!t) throw notFound('ไม่พบแท็ก'); requireBrand(s, t.brand_id);
+    if (t.kind !== 'manual') throw bad('tag_auto', 'แท็กอัตโนมัติ ระบบติดให้เองตามเงื่อนไข');
+    const m = await one("SELECT id FROM members WHERE id = $1 AND status = 'active'", [p.id]); if (!m) throw notFound('ไม่พบสมาชิก');
+    await q('INSERT INTO member_tags (member_id, tag_id, added_by) VALUES ($1,$2,$3) ON CONFLICT DO NOTHING', [m.id, t.id, s.id]);
+    return { added: true };
+  });
+  r.del('/api/admin/members/:id/tags/:tag', async (req, _b, _u, p) => {
+    const s = await staffUser(req); requirePage(s, 'members');
+    const t = await one('SELECT * FROM tags WHERE id = $1', [parseInt(p.tag, 10)]); if (!t) throw notFound('ไม่พบแท็ก'); requireBrand(s, t.brand_id);
+    await q('DELETE FROM member_tags WHERE member_id = $1 AND tag_id = $2', [p.id, t.id]);
+    return { removed: true };
+  });
+
+  r.get('/api/admin/members/:id', async (req, _b, url, p) => {
+    const s = await staffUser(req); requirePage(s, 'members');
+    const brand = url.searchParams.get('brand'); if (brand) requireBrand(s, brand);
     const m = await one('SELECT * FROM members WHERE id = $1', [p.id]);
     if (!m) throw notFound('ไม่พบสมาชิก');
     const inScope = await one('SELECT 1 FROM point_ledger WHERE member_id = $1 AND brand_id = ANY($2) LIMIT 1', [m.id, s.brands]);
@@ -253,7 +410,8 @@ export default function (r) {
       links: await q('SELECT * FROM member_brand_links WHERE member_id = $1', [m.id]),
       ledger: await q('SELECT * FROM point_ledger WHERE member_id = $1 AND brand_id = ANY($2) ORDER BY id DESC LIMIT 50', [m.id, s.brands]),
       coupons: (await q(COUPON_SQL + ' WHERE c.member_id = $1 AND (c.brand_id = ANY($2) OR c.brand_id IS NULL) ORDER BY c.id DESC', [m.id, s.brands])).map(couponView),
-      bills: await q('SELECT pos_bill_id, branch_id, brand_id, total, points_earned, status, paid_at FROM sales_transactions WHERE member_id = $1 AND brand_id = ANY($2) ORDER BY paid_at DESC LIMIT 50', [m.id, s.brands])
+      bills: await q('SELECT pos_bill_id, branch_id, brand_id, total, discount, points_earned, status, paid_at FROM sales_transactions WHERE member_id = $1 AND brand_id = ANY($2) ORDER BY paid_at DESC LIMIT 50', [m.id, s.brands]),
+      ...(brand ? await memberExtra(m.id, brand) : {})
     };
   });
 
