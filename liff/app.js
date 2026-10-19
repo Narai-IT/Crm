@@ -52,6 +52,13 @@
     $app.innerHTML = '<div class="center"><h2>' + esc(title) + '</h2><p class="muted">' + esc(detail || '') + '</p>' + (retry ? '<button class="btn" data-a="reload">ลองอีกครั้ง</button>' : '') + '</div>';
   }
 
+  // เปิดจากปุ่ม "สมัครสมาชิก" ที่หน้าลูกค้าสั่งเอง: ?branch= เลือกสาขาประจำให้ (คูปองต้อนรับตามสาขา) · ?from=kiosk บอกให้กลับไปสั่งอาหารต่อหลังสมัคร
+  function joinParams(p) {
+    const br = p.get('branch'); const b = S.brands.find((x) => x.id === S.brand);
+    if (br && b && b.branches.some((x) => x.id === br)) S.reg.branchId = br;
+    if (p.get('from') === 'kiosk') S.fromKiosk = true;
+  }
+
   /* ---------- เริ่มต้น + ยืนยันตัวตน ---------- */
   async function boot() {
     try {
@@ -73,12 +80,14 @@
         const p2 = new URLSearchParams(location.search);
         if (p2.get('brand') && brands.some((b) => b.id === p2.get('brand')) && p2.get('brand') !== S.brand) { S.brand = p2.get('brand'); applyTheme(); }
         if (p2.get('tab')) S.tab = p2.get('tab');
+        joinParams(p2);
       } else if (cfg.dev) {
         // ผู้ใช้ทดสอบประจำเบราว์เซอร์ (ID ไม่ใช่รูปแบบ LINE จริง จึงสวมเป็นลูกค้าจริงไม่ได้)
         let id = null; try { id = localStorage.getItem('crm-liff-dev-user'); } catch (e) { /* ignore */ }
         if (!id) { id = 'Udev' + Math.random().toString(36).slice(2, 12) + Date.now().toString(36); try { localStorage.setItem('crm-liff-dev-user', id); } catch (e) { /* ignore */ } }
         S.auth = { 'x-dev-line-user': id, 'x-dev-line-name': encodeURIComponent('ผู้ทดสอบ') };
         S.dev = true;
+        joinParams(params);
       } else {
         return fatal('ยังไม่ได้ตั้งค่า LIFF', 'ผู้ดูแลต้องใส่ LIFF_ID ในไฟล์ .env ของ server');
       }
@@ -135,7 +144,8 @@
     const pct = t.next ? Math.min(100, Math.round(t.at / t.max * 100)) : 100;
     const ready = S.coupons.filter((c) => c.status === 'ready').sort((x, y) => x.expiresAt - y.expiresAt);
     const canRedeem = S.rewards.filter((r) => r.points_cost <= w.balance).length;
-    return '<div class="card idcard"><span class="muted" style="font-size:13px">คุณ' + esc(m.name) + ' · สาขาประจำ ' + esc(branchName(m.homeBranch)) + '</span>' +
+    return (S.joined ? '<div class="card joined" role="status"><b>✅ สมัครเรียบร้อย</b><span>กลับไปหน้าสั่งอาหาร แล้วใส่เบอร์ <b class="num">' + esc(S.joined) + '</b> หรือเลขที่สมาชิกด้านล่าง เพื่อสะสมแต้มบิลนี้</span></div>' : '') +
+      '<div class="card idcard"><span class="muted" style="font-size:13px">คุณ' + esc(m.name) + ' · สาขาประจำ ' + esc(branchName(m.homeBranch)) + '</span>' +
       '<span style="font-size:12px;font-weight:600;color:var(--ai)">เลขที่สมาชิก</span><div class="row"><span class="id">' + esc(m.id) + '</span><button class="btn sm" data-a="copy" data-v="' + esc(m.id) + '">คัดลอก</button></div></div>' +
       '<div class="wallet"><div class="row" style="justify-content:flex-start"><span class="tier ' + t.name + '">' + t.name + '</span><small>' + esc(b.short_name) + ' · สมาชิกตั้งแต่ ' + date(m.joinedAt) + '</small></div>' +
       '<div><small>แต้ม ' + esc(b.short_name) + ' ที่ใช้ได้</small><div><span class="pts num">' + fmt(w.balance) + '</span> แต้ม</div></div>' +
@@ -270,6 +280,7 @@
       try {
         const res = await api('POST', '/api/liff/register', { brand: S.brand, name: r.name.trim(), phone: r.phone, otp: S.cfg.requireOtp ? r.otp : undefined, birthday: r.birthday || null, branchId: r.branchId, marketing: r.marketing, privacy: true });
         toast(res.linked ? 'พบบัญชีเดิมของคุณ ผูกกับ LINE แล้ว' : 'สมัครสำเร็จ รับ ' + fmt(res.welcomePoints) + ' แต้ม');
+        if (S.fromKiosk) S.joined = r.phone;
         S.tab = 'home'; await refresh();
       } catch (e) { r.err = e.message; render(); }
     }

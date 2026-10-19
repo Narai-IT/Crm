@@ -53,6 +53,12 @@ export default function (r) {
     }
     return id;
   };
+  // ลิงก์สมัครสมาชิกผ่าน LINE สำหรับปุ่มที่หน้าลูกค้าสั่งเอง (เลือกแบรนด์/สาขาของเครื่องนี้ให้)
+  r.post('/api/pos/join-link', async (req) => {
+    const t = await posTerminal(req);
+    const id = process.env.LIFF_ID;
+    return { url: id ? 'https://liff.line.me/' + id + '?brand=' + encodeURIComponent(t.brandId) + '&branch=' + encodeURIComponent(t.branchId) + '&from=kiosk' : null };
+  });
   r.post('/api/pos/members/wallet', async (req, body) => {
     const t = await posTerminal(req);
     return tx((db) => core.posWallet(db, { memberId: memberOf(body), brandId: t.brandId, subtotal: body.subtotal, ref: body.ref ? String(body.ref) : null }));

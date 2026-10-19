@@ -446,3 +446,18 @@ t('แจ้งแต้มทาง LINE: ค่าเริ่มต้นไ�
   const rule = (await call('GET', '/api/admin/earn-rules', undefined, adm)).data.find((r) => r.brand_id === 'humlai');
   assert.equal(rule.points_notify, 'all');
 });
+
+test('ลิงก์สมัครสมาชิกจากหน้าลูกค้าสั่งเอง: เลือกแบรนด์และสาขาของเครื่อง POS', { skip: !TEST_DB }, async () => {
+  assert.equal((await call('POST', '/api/pos/join-link', {}, { 'x-api-key': 'wrong' })).status, 401);
+  const old = process.env.LIFF_ID;
+  process.env.LIFF_ID = '1234567890-abcdEFGH';
+  try {
+    const r = await call('POST', '/api/pos/join-link', {}, posHL01);
+    assert.equal(r.status, 200);
+    const u = new URL(r.data.url);
+    assert.equal(u.origin + u.pathname, 'https://liff.line.me/1234567890-abcdEFGH');
+    assert.equal(u.searchParams.get('brand'), 'humlai');
+    assert.equal(u.searchParams.get('branch'), 'HL01');
+    assert.equal(u.searchParams.get('from'), 'kiosk');
+  } finally { if (old === undefined) delete process.env.LIFF_ID; else process.env.LIFF_ID = old; }
+});
