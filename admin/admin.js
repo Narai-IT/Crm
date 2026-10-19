@@ -319,27 +319,35 @@
   function rulesView() {
     const r = (S.data.rules || []).find((x) => x.brand_id === S.brand);
     if (!r) return '<div class="card"><p class="muted">ยังไม่มีกฎแต้มของแบรนด์นี้</p></div>';
-    return '<form class="card" data-f="rule"><h2>กฎแต้ม ' + esc(brand().name) + '</h2><div class="grid">' +
-      '<div class="field"><label for="r-baht">ทุกกี่บาท</label><input id="r-baht" name="baht" type="number" min="1" step="0.01" value="' + Number(r.baht_per_unit) + '" required></div>' +
-      '<div class="field"><label for="r-pts">ได้กี่แต้ม</label><input id="r-pts" name="pts" type="number" min="0" value="' + r.points_per_unit + '" required></div>' +
-      '<div class="field"><label for="r-base">คิดจากยอด</label><select id="r-base" name="base">' + [['net', 'ยอดสุทธิหลังส่วนลด'], ['exvat', 'ยอดก่อน VAT'], ['gross', 'ยอดก่อนส่วนลด']].map((o) => '<option value="' + o[0] + '"' + (r.base_amount === o[0] ? ' selected' : '') + '>' + o[1] + '</option>').join('') + '</select></div>' +
-      '<div class="field"><label for="r-round">เศษ</label><select id="r-round" name="rounding"><option value="floor"' + (r.rounding === 'floor' ? ' selected' : '') + '>ปัดทิ้ง</option><option value="round"' + (r.rounding === 'round' ? ' selected' : '') + '>ปัดครึ่งขึ้น</option></select></div>' +
-      '<div class="field"><label for="r-wel">แต้มต้อนรับ</label><input id="r-wel" name="welcome" type="number" min="0" value="' + r.welcome_points + '"></div>' +
-      '<div class="field"><label for="r-exp">แต้มหมดอายุ (เดือน)</label><input id="r-exp" name="expiryMonths" type="number" min="0" value="' + r.expiry_months + '"><span class="hint">0 = ไม่หมดอายุ</span></div>' +
-      '<div class="field"><label for="r-back">ขอแต้มย้อนหลังได้ (วัน)</label><input id="r-back" name="backdays" type="number" min="0" value="' + r.backdate_days + '"></div>' +
-      '<div class="field"><label for="r-gold">Gold เมื่อสะสมครบ (12 เดือน)</label><input id="r-gold" name="gold" type="number" min="0" value="' + r.gold_at + '"></div>' +
-      '<div class="field"><label for="r-plat">Platinum เมื่อสะสมครบ</label><input id="r-plat" name="platinum" type="number" min="0" value="' + r.platinum_at + '"></div>' +
-      '<label class="check"><input type="checkbox" name="promoOn"' + (r.promo_on ? ' checked' : '') + '>คูณแต้มประจำสัปดาห์</label>' +
-      '<div class="field"><label for="r-day">วัน</label><select id="r-day" name="promoDay">' + DAYS.map((d, i) => '<option value="' + i + '"' + (r.promo_day === i ? ' selected' : '') + '>' + d + '</option>').join('') + '</select></div>' +
-      '<div class="field"><label for="r-mult">คูณ</label><input id="r-mult" name="promoMult" type="number" min="1" step="0.5" value="' + Number(r.promo_mult) + '"></div>' +
-      '<div class="field"><label for="r-notify">แจ้งแต้มทาง LINE หลังชำระบิล</label><select id="r-notify" name="pointsNotify">' +
-        [['off', 'ไม่แจ้ง (ไม่เสียโควต้าข้อความ)'], ['all', 'แจ้งทุกบิล'], ['min', 'แจ้งเมื่อยอดบิลถึง…']].map((o) => '<option value="' + o[0] + '"' + ((r.points_notify || 'off') === o[0] ? ' selected' : '') + '>' + o[1] + '</option>').join('') + '</select>' +
-        '<span class="hint">ข้อความแจ้งแต้มนับโควต้าข้อความของ LINE OA · ลูกค้าดูแต้มในบัตรสมาชิกได้ตลอด</span></div>' +
-      '<div class="field"><label for="r-nmin">ยอดบิลขั้นต่ำที่แจ้ง (บาท)</label><input id="r-nmin" name="pointsNotifyMin" type="number" min="0" value="' + (Number(r.points_notify_min) || '') + '" placeholder="ใช้เมื่อเลือก แจ้งเมื่อยอดบิลถึง…"></div>' +
-      '<div class="field"><label for="r-review">แต้มรีวิวร้านในแชท LINE</label><input id="r-review" name="reviewPoints" type="number" min="0" max="1000" step="1" value="' + (r.review_points == null ? 5 : r.review_points) + '">' +
-        '<span class="hint">ลูกค้าพิมพ์ "ติชม" แล้วเลือกคะแนน · ได้เฉพาะวันที่มีบิลของแบรนด์นี้ วันละครั้ง · 0 = ปิด</span></div>' +
-      '</div><small class="muted">มีผลกับบิลหลังบันทึก บิลเก่าคิดตามกฎเดิม · ใช้อยู่ตั้งแต่ ' + date(r.effective_from) + '</small>' + (S.err ? '<div class="err" role="alert">' + esc(S.err) + '</div>' : '') +
-      '<div class="actions"><button class="btn">บันทึกกฎแต้ม</button></div></form>';
+    const opt = (list, cur) => list.map((o) => '<option value="' + o[0] + '"' + (cur === o[0] ? ' selected' : '') + '>' + o[1] + '</option>').join('');
+    const fld = (id, label, input, hint) => '<div class="field"><label for="' + id + '">' + label + '</label>' + input + (hint ? '<span class="hint">' + hint + '</span>' : '') + '</div>';
+    const num = (id, name, val, extra) => '<input id="' + id + '" name="' + name + '" type="number" value="' + val + '"' + (extra || ' min="0"') + '>';
+    const sec = (title, desc, body) => '<section class="rsec"><div class="rsec-h"><h3>' + title + '</h3><small class="muted">' + desc + '</small></div><div class="rgrid">' + body + '</div></section>';
+    // ตัวอย่างจากค่าที่บันทึกไว้ ให้เห็นภาพว่าลูกค้าได้กี่แต้ม
+    const ex = Math.floor(500 / Number(r.baht_per_unit) + 1e-9) * r.points_per_unit;
+    return '<form class="card rules" data-f="rule"><h2>กฎแต้ม ' + esc(brand().name) + '</h2>' +
+      sec('แต้มจากยอดซื้อ', 'ตัวอย่างตามที่บันทึกไว้: บิล 500 บาท ได้ ' + fmt(ex) + ' แต้ม',
+        fld('r-baht', 'ทุกกี่บาท', num('r-baht', 'baht', Number(r.baht_per_unit), ' min="1" step="0.01" required')) +
+        fld('r-pts', 'ได้กี่แต้ม', num('r-pts', 'pts', r.points_per_unit, ' min="0" required')) +
+        fld('r-base', 'คิดจากยอด', '<select id="r-base" name="base">' + opt([['net', 'ยอดสุทธิหลังส่วนลด'], ['exvat', 'ยอดก่อน VAT'], ['gross', 'ยอดก่อนส่วนลด']], r.base_amount) + '</select>') +
+        fld('r-round', 'เศษ', '<select id="r-round" name="rounding">' + opt([['floor', 'ปัดทิ้ง'], ['round', 'ปัดครึ่งขึ้น']], r.rounding) + '</select>')) +
+      sec('วันแต้มคูณ', 'คูณแต้มจากยอดซื้อทุกสัปดาห์ในวันที่เลือก',
+        '<label class="check"><input type="checkbox" name="promoOn"' + (r.promo_on ? ' checked' : '') + '>เปิดใช้วันแต้มคูณ</label>' +
+        fld('r-day', 'วัน', '<select id="r-day" name="promoDay">' + DAYS.map((d, i) => '<option value="' + i + '"' + (r.promo_day === i ? ' selected' : '') + '>' + d + '</option>').join('') + '</select>') +
+        fld('r-mult', 'คูณ (เท่า)', num('r-mult', 'promoMult', Number(r.promo_mult), ' min="1" step="0.5"'))) +
+      sec('สมาชิกใหม่และอายุแต้ม', 'แต้มต้อนรับให้ครั้งเดียวต่อสมาชิกต่อแบรนด์',
+        fld('r-wel', 'แต้มต้อนรับ', num('r-wel', 'welcome', r.welcome_points), '0 = ไม่แจก') +
+        fld('r-exp', 'แต้มหมดอายุ (เดือน)', num('r-exp', 'expiryMonths', r.expiry_months), '0 = ไม่หมดอายุ') +
+        fld('r-back', 'ขอแต้มย้อนหลังได้ (วัน)', num('r-back', 'backdays', r.backdate_days))) +
+      sec('ระดับสมาชิก', 'คิดจากแต้มที่ได้ใน 12 เดือนล่าสุด',
+        fld('r-gold', 'Gold เมื่อสะสมครบ', num('r-gold', 'gold', r.gold_at), 'แต้ม') +
+        fld('r-plat', 'Platinum เมื่อสะสมครบ', num('r-plat', 'platinum', r.platinum_at), 'แต้ม')) +
+      sec('LINE', 'ข้อความแจ้งแต้มนับโควต้าข้อความของ LINE OA · ข้อความตอบรีวิวไม่นับ',
+        fld('r-notify', 'แจ้งแต้มหลังชำระบิล', '<select id="r-notify" name="pointsNotify">' + opt([['off', 'ไม่แจ้ง'], ['all', 'แจ้งทุกบิล'], ['min', 'แจ้งเมื่อยอดบิลถึง…']], r.points_notify || 'off') + '</select>', 'ลูกค้าดูแต้มในบัตรสมาชิกได้ตลอด') +
+        fld('r-nmin', 'ยอดบิลขั้นต่ำที่แจ้ง (บาท)', '<input id="r-nmin" name="pointsNotifyMin" type="number" min="0" value="' + (Number(r.points_notify_min) || '') + '">', 'ใช้เมื่อเลือก "แจ้งเมื่อยอดบิลถึง…"') +
+        fld('r-review', 'แต้มรีวิวร้านในแชท', num('r-review', 'reviewPoints', r.review_points == null ? 5 : r.review_points, ' min="0" max="1000" step="1"'), 'ลูกค้าพิมพ์ "ติชม" แล้วเลือกคะแนน · เฉพาะวันที่มีบิล วันละครั้ง · 0 = ปิด')) +
+      (S.err ? '<div class="err" role="alert">' + esc(S.err) + '</div>' : '') +
+      '<div class="actions rules-foot"><button class="btn">บันทึกกฎแต้ม</button><small class="muted">มีผลกับบิลหลังบันทึก บิลเก่าคิดตามกฎเดิม · กฎนี้ใช้อยู่ตั้งแต่ ' + date(r.effective_from) + '</small></div></form>';
   }
 
   function membersView() {
