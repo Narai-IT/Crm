@@ -336,6 +336,8 @@
         [['off', 'ไม่แจ้ง (ไม่เสียโควต้าข้อความ)'], ['all', 'แจ้งทุกบิล'], ['min', 'แจ้งเมื่อยอดบิลถึง…']].map((o) => '<option value="' + o[0] + '"' + ((r.points_notify || 'off') === o[0] ? ' selected' : '') + '>' + o[1] + '</option>').join('') + '</select>' +
         '<span class="hint">ข้อความแจ้งแต้มนับโควต้าข้อความของ LINE OA · ลูกค้าดูแต้มในบัตรสมาชิกได้ตลอด</span></div>' +
       '<div class="field"><label for="r-nmin">ยอดบิลขั้นต่ำที่แจ้ง (บาท)</label><input id="r-nmin" name="pointsNotifyMin" type="number" min="0" value="' + (Number(r.points_notify_min) || '') + '" placeholder="ใช้เมื่อเลือก แจ้งเมื่อยอดบิลถึง…"></div>' +
+      '<div class="field"><label for="r-review">แต้มรีวิวร้านในแชท LINE</label><input id="r-review" name="reviewPoints" type="number" min="0" max="1000" step="1" value="' + (r.review_points == null ? 5 : r.review_points) + '">' +
+        '<span class="hint">ลูกค้าพิมพ์ "ติชม" แล้วเลือกคะแนน · ได้เฉพาะวันที่มีบิลของแบรนด์นี้ วันละครั้ง · 0 = ปิด</span></div>' +
       '</div><small class="muted">มีผลกับบิลหลังบันทึก บิลเก่าคิดตามกฎเดิม · ใช้อยู่ตั้งแต่ ' + date(r.effective_from) + '</small>' + (S.err ? '<div class="err" role="alert">' + esc(S.err) + '</div>' : '') +
       '<div class="actions"><button class="btn">บันทึกกฎแต้ม</button></div></form>';
   }
@@ -553,6 +555,7 @@
       await api('PUT', '/api/admin/earn-rules/' + S.brand, { baht: o.baht, pts: o.pts, base: o.base, rounding: o.rounding, welcome: Number(o.welcome), expiryMonths: Number(o.expiryMonths), backdays: Number(o.backdays),
         tiers: { gold: Number(o.gold), platinum: Number(o.platinum) }, promo: { on: o.promoOn, day: Number(o.promoDay), mult: Number(o.promoMult) } });
       await api('PATCH', '/api/admin/brands/' + S.brand + '/notify', { pointsNotify: o.pointsNotify, pointsNotifyMin: o.pointsNotifyMin });
+      await api('PATCH', '/api/admin/brands/' + S.brand + '/review', { reviewPoints: Number(o.reviewPoints) });
       S.err = ''; toast('บันทึกกฎแต้มแล้ว'); await load();
     },
     password: async (o) => {

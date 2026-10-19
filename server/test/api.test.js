@@ -461,3 +461,34 @@ test('ลิงก์สมัครสมาชิกจากหน้าล�
     assert.equal(u.searchParams.get('from'), 'kiosk');
   } finally { if (old === undefined) delete process.env.LIFF_ID; else process.env.LIFF_ID = old; }
 });
+
+t('แต้มรีวิวร้านในแชท LINE: ตั้งค่าในหลังบ้าน · ได้เฉพาะวันที่มีบิล · วันละครั้ง', async () => {
+  const uid = 'Ureview0000000000000000000000001';
+  const u = { 'x-dev-line-user': uid };
+  await call('POST', '/api/liff/register', { brand: 'humlai', name: 'รีวิว', phone: '0855550000', privacy: true }, u);
+  const mid = (await call('GET', '/api/liff/me', undefined, u)).data.member.id;
+  let ev = 0;
+  const rate = () => {
+    const body = JSON.stringify({ destination: 'U0', events: [{ type: 'message', webhookEventId: 'EVR' + (++ev), replyToken: 'r', source: { type: 'user', userId: uid }, message: { type: 'text', text: 'อร่อยมาก' } }] });
+    const sig = crypto.createHmac('sha256', 'test-secret-humlai').update(body).digest('base64');
+    return fetch(base + '/webhooks/line/humlai', { method: 'POST', headers: { 'content-type': 'application/json', 'x-line-signature': sig }, body });
+  };
+  const bonus = () => mods.db.one("SELECT COALESCE(sum(points),0)::int AS n FROM point_ledger WHERE member_id = $1 AND entry_type = 'bonus'", [mid]).then((r) => r.n);
+  const adm = { authorization: 'Bearer ' + (await call('POST', '/api/admin/login', { username: 'S003', password: 'demo1234' })).data.token };
+  assert.equal((await call('PATCH', '/api/admin/brands/humlai/review', { reviewPoints: -1 }, adm)).status, 400);
+  assert.equal((await call('PATCH', '/api/admin/brands/humlai/review', { reviewPoints: 3 }, adm)).data.review_points, 3);
+  assert.equal((await call('GET', '/api/admin/earn-rules', undefined, adm)).data.find((r) => r.brand_id === 'humlai').review_points, 3);
+
+  // ยังไม่มีบิลวันนี้ → ไม่ได้แต้ม (บอกวิธีได้แต้มแทน)
+  await rate();
+  assert.equal(await bonus(), 0);
+  // มีบิลวันนี้ → ได้ 3 แต้ม ครั้งเดียวต่อวัน
+  await call('POST', '/api/pos/transactions', { posBillId: 'RV-1', memberId: mid, items: [{ id: 'a', name: 'x', price: 60, qty: 1 }] }, posHL01);
+  await rate();
+  assert.equal(await bonus(), 3);
+  await rate();
+  assert.equal(await bonus(), 3);
+  // ปิด (0)
+  assert.equal((await call('PATCH', '/api/admin/brands/humlai/review', { reviewPoints: 0 }, adm)).data.review_points, 0);
+  await call('PATCH', '/api/admin/brands/humlai/review', { reviewPoints: 5 }, adm);
+});

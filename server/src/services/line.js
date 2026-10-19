@@ -89,11 +89,16 @@ export async function handleEvent(db, brandId, ev) {
   } else if (text === 'ติชม') await reply('text', { text: 'ยินดีรับฟังครับ พิมพ์คำติชมหรือคำถามไว้ได้เลย\nพนักงานจะตอบกลับในเวลาทำการ', quick: RATINGS });
   else if (RATINGS.includes(text)) {
     let extra = '';
-    if (member) {
-      // ให้แต้มรีวิวได้วันละ 1 ครั้งต่อแบรนด์
-      const day = new Date().toISOString().slice(0, 10);
-      const r = await credit(db, { memberId: member.id, brandId, type: 'bonus', points: 5, key: 'rating:' + member.id + ':' + brandId + ':' + day, note: 'ให้คะแนนร้าน', actorType: 'line', actorId: userId });
-      if (!r.duplicate) extra = '\nได้รับ +5 แต้ม ' + brand.short_name;
+    const pts = Number(brand.review_points) || 0;
+    if (member && pts > 0) {
+      // แต้มรีวิว: เฉพาะคนที่มีบิลของแบรนด์นี้วันนี้ (เวลาไทย) · วันละ 1 ครั้งต่อแบรนด์
+      const today = await db.one(`SELECT to_char(now() AT TIME ZONE 'Asia/Bangkok', 'YYYY-MM-DD') AS day,
+          EXISTS (SELECT 1 FROM sales_transactions WHERE member_id = $1 AND brand_id = $2 AND status <> 'void'
+                  AND paid_at >= date_trunc('day', now() AT TIME ZONE 'Asia/Bangkok') AT TIME ZONE 'Asia/Bangkok') AS bought`, [member.id, brandId]);
+      if (today.bought) {
+        const r = await credit(db, { memberId: member.id, brandId, type: 'bonus', points: pts, key: 'rating:' + member.id + ':' + brandId + ':' + today.day, note: 'ให้คะแนนร้าน', actorType: 'line', actorId: userId });
+        if (!r.duplicate) extra = '\nได้รับ +' + pts + ' แต้ม ' + brand.short_name;
+      } else extra = '\n(รีวิวในวันที่ทานที่ร้านและใส่เลขสมาชิก รับ +' + pts + ' แต้ม)';
     }
     await reply('text', { text: 'ขอบคุณสำหรับรีวิวครับ' + extra });
   } else await reply('text', { text: 'ได้รับข้อความแล้ว แอดมินจะตอบกลับในเวลาทำการครับ' });
