@@ -57,8 +57,8 @@ h1, h2, h3 { font-family: var(--f-display); font-weight: 600; margin: 0; }
 .stats b { font-family: var(--f-display); font-size: 20px; display: block; }
 .stats span { font-size: 12px; color: var(--muted); }
 
-.seg { display: flex; gap: 4px; background: #F3ECE7; border-radius: 999px; padding: 4px; }
-.seg button { flex: 1; min-height: 38px; border: 0; border-radius: 999px; background: transparent; font-size: 14px; font-weight: 600; color: var(--muted); padding: 0 10px; white-space: nowrap; }
+.seg { display: flex; gap: 4px; background: #F3ECE7; border-radius: 999px; padding: 4px; overflow-x: auto; scrollbar-width: none; max-width: 100%; }
+.seg button { flex: 1 0 auto; min-height: 38px; border: 0; border-radius: 999px; background: transparent; font-size: 14px; font-weight: 600; color: var(--muted); padding: 0 10px; white-space: nowrap; }
 .seg button[aria-pressed="true"] { background: #fff; color: var(--ink); }
 
 .coupon { display: flex; background: var(--card); border: 1px solid var(--line); border-radius: 14px; overflow: hidden; }
@@ -121,3 +121,5 @@ h1, h2, h3 { font-family: var(--f-display); font-weight: 600; margin: 0; }
 .card.joined { border: 2px solid #86efac; background: #f0fdf4; display: flex; flex-direction: column; gap: 4px; font-size: 14px; }
 .code .cqr { width: 180px; max-width: 70%; margin: 4px auto 6px; background: #fff; border-radius: 8px; }
 .code .cqr svg { display: block; width: 100%; height: auto; }
+.reward img.art { height: auto; aspect-ratio: 1 / 1; object-fit: cover; padding: 0; width: 100%; display: block; }
+.reward .desc { color: var(--muted); font-size: 12px; white-space: pre-line; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }

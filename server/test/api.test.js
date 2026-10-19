@@ -523,3 +523,50 @@ t('POS สแกน QR คูปอง: ได้สมาชิกและค�
   // QR บัตรสมาชิก / เบอร์โทร ไม่มี scannedCoupon
   assert.equal((await call('POST', '/api/pos/members/resolve', { query: '0866660000' }, posHL01)).data.scannedCoupon, null);
 });
+
+t('ของรางวัล: แบบคูปอง · จำกัดระดับ · จำกัดต่อคน · ช่วงวันที่', async () => {
+  const u = { 'x-dev-line-user': 'Urewardset00000000000000000000001' };
+  await call('POST', '/api/liff/register', { brand: 'humlai', name: 'ของรางวัล', phone: '0877770000', privacy: true }, u);
+  const mid = (await call('GET', '/api/liff/me', undefined, u)).data.member.id;
+  await mods.db.q(`INSERT INTO point_ledger (member_id, brand_id, entry_type, points, balance_after, idempotency_key, note, actor_type)
+    VALUES ($1, 'humlai', 'adjust', 500, 500, 'test-rw-' || $1, 'ทดสอบ', 'system')`, [mid]).catch(() => {});
+  await mods.db.q("INSERT INTO wallets (member_id, brand_id, balance) VALUES ($1, 'humlai', 500) ON CONFLICT (member_id, brand_id) DO UPDATE SET balance = 500", [mid]);
+  const adm = { authorization: 'Bearer ' + (await call('POST', '/api/admin/login', { username: 'S003', password: 'demo1234' })).data.token };
+  const tpl = await mods.db.one(`SELECT id FROM coupon_templates t WHERE brand_id = 'humlai' AND kind <> 'internal' AND t.is_active AND (t.issue_from IS NULL OR t.issue_from <= now())
+    AND (t.issue_to IS NULL OR t.issue_to >= now()) AND (t.valid_to IS NULL OR t.valid_to > now()) ORDER BY id LIMIT 1`);
+  const redeem = (id, k) => call('POST', '/api/liff/redemptions', { rewardId: id }, { ...u, 'idempotency-key': k });
+  const list = async () => (await call('GET', '/api/liff/rewards?brand=humlai', undefined, u)).data;
+
+  // แบบคูปอง: ต้องเลือกคูปอง · แลกแล้วได้คูปองใบนั้น · จำกัด 1 ครั้งต่อวัน
+  assert.equal((await call('POST', '/api/admin/rewards', { brand: 'humlai', kind: 'coupon', name: 'แลกคูปอง', cost: 10 }, adm)).status, 400);
+  const cp = await call('POST', '/api/admin/rewards', { brand: 'humlai', kind: 'coupon', templateId: tpl.id, name: 'แลกคูปอง', cost: 10, description: 'รายละเอียด', limitCount: 1, limitPeriod: 'day' }, adm);
+  assert.equal(cp.status, 200, JSON.stringify(cp.data));
+  assert.equal(cp.data.coupon_template_id, tpl.id);
+  const r1 = await redeem(cp.data.id, 'rw-cp-1');
+  assert.equal(r1.status, 200, JSON.stringify(r1.data));
+  assert.equal((await mods.db.one('SELECT template_id FROM member_coupons WHERE id = $1', [r1.data.couponId])).template_id, tpl.id);
+  assert.equal((await redeem(cp.data.id, 'rw-cp-2')).status, 409);
+  assert.equal((await list()).find((r) => r.id === cp.data.id).why, 'แลกครบ 1 ครั้งในวันนี้');
+
+  // เฉพาะ Gold/Platinum: สมาชิก Silver เห็นเหตุผล แลกไม่ได้
+  const gold = await call('POST', '/api/admin/rewards', { brand: 'humlai', name: 'ของ Gold', cost: 10, value: 20, tiers: ['GOLD', 'PLATINUM'] }, adm);
+  assert.equal(gold.status, 200, JSON.stringify(gold.data));
+  assert.deepEqual(gold.data.tiers, ['GOLD', 'PLATINUM']);
+  assert.match((await list()).find((r) => r.id === gold.data.id).why, /Gold/);
+  assert.equal((await redeem(gold.data.id, 'rw-gold-1')).status, 400);
+  // เลือกครบทุกระดับ = ไม่จำกัด (เก็บเป็น null)
+  const all = await call('PATCH', '/api/admin/rewards/' + gold.data.id, { tiers: ['SILVER', 'GOLD', 'PLATINUM'] }, adm);
+  assert.equal(all.data.tiers, null);
+  assert.equal(all.data.name, 'ของ Gold');
+
+  // ยังไม่ถึงวันเริ่ม: ไม่อยู่ในรายการ แลกไม่ได้ · แก้ให้เริ่มวันนี้แล้วแลกได้
+  const future = await call('POST', '/api/admin/rewards', { brand: 'humlai', name: 'อนาคต', cost: 10, value: 5, startDate: '2099-01-01' }, adm);
+  assert.equal(future.status, 200, JSON.stringify(future.data));
+  assert.ok(!(await list()).some((r) => r.id === future.data.id));
+  assert.equal((await redeem(future.data.id, 'rw-fut-1')).status, 400);
+  assert.equal((await call('POST', '/api/admin/rewards', { brand: 'humlai', name: 'ผิด', cost: 10, startDate: '2099-02-01', endDate: '2099-01-01' }, adm)).status, 400);
+  const adminRow = (await call('GET', '/api/admin/rewards', undefined, adm)).data.find((r) => r.id === future.data.id);
+  assert.equal(adminRow.start_day, '2099-01-01');
+  await call('PATCH', '/api/admin/rewards/' + future.data.id, { startDate: null }, adm);
+  assert.equal((await redeem(future.data.id, 'rw-fut-2')).status, 200);
+});

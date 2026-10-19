@@ -175,16 +175,19 @@
   }
   function rewardsView() {
     const b = brand(); const bal = S.me.wallets[b.id].balance;
-    const cats = [['all', 'ทั้งหมด'], ['food', 'อาหาร'], ['side', 'ทานเล่น'], ['drink', 'เครื่องดื่ม'], ['discount', 'ส่วนลด']].filter((c) => c[0] === 'all' || S.rewards.some((r) => r.category === c[0]));
+    const cats = [['all', 'ทั้งหมด'], ['food', 'อาหาร'], ['side', 'ทานเล่น'], ['drink', 'เครื่องดื่ม'], ['discount', 'ส่วนลด'], ['coupon', 'คูปอง']].filter((c) => c[0] === 'all' || S.rewards.some((r) => r.category === c[0]));
     const list = S.rewards.filter((r) => S.rcat === 'all' || r.category === S.rcat);
     return '<div class="hero row"><span><span style="font-size:13px">แต้ม ' + esc(b.short_name) + ' ที่ใช้ได้</span><b class="num">' + fmt(bal) + ' แต้ม</b></span>' + (b.baht_per_unit ? '<span style="font-size:12px;text-align:right">ทุก ' + fmt(b.baht_per_unit) + ' บาท<br>= ' + b.points_per_unit + ' แต้ม</span>' : '') + '</div>' +
       (cats.length > 2 ? '<div class="seg">' + cats.map((c) => '<button data-a="rcat" data-v="' + c[0] + '" aria-pressed="' + (S.rcat === c[0]) + '">' + c[1] + '</button>').join('') + '</div>' : '') +
       (list.length ? '<div class="rgrid">' + list.map((r) => {
-        const lack = r.points_cost - bal; const out = r.stock !== null && r.stock <= 0;
-        return '<div class="reward"><div class="art">' + esc(r.name) + '</div><div class="in"><b style="font-size:14px">' + esc(r.name) + '</b><span class="c num">' + fmt(r.points_cost) + ' แต้ม</span>' +
-          '<button class="btn sm" style="margin-top:auto" data-a="pick" data-v="' + r.id + '"' + (lack > 0 || out ? ' disabled' : '') + '>' + (out ? 'หมดแล้ว' : lack > 0 ? 'ขาดอีก ' + fmt(lack) : 'แลกเลย') + '</button></div></div>';
+        // why = แลกไม่ได้เพราะหมด/ระดับ/ครบสิทธิ์ (ระบบสมาชิกบอกมา)
+        const lack = r.points_cost - bal; const no = r.why || (lack > 0 ? 'ขาดอีก ' + fmt(lack) : '');
+        return '<div class="reward' + (r.image ? ' has-img' : '') + '">' + (r.image ? '<img class="art" alt="" loading="lazy" src="' + esc(r.image) + '">' : '<div class="art">' + esc(r.name) + '</div>') +
+          '<div class="in"><b style="font-size:14px">' + esc(r.name) + '</b>' + (r.description ? '<small class="desc">' + esc(r.description) + '</small>' : '') +
+          '<span class="c num">' + fmt(r.points_cost) + ' แต้ม</span>' + (r.endDay ? '<small class="muted">แลกได้ถึง ' + date(r.endDay + 'T12:00:00+07:00') + '</small>' : '') +
+          '<button class="btn sm" style="margin-top:auto" data-a="pick" data-v="' + r.id + '"' + (no ? ' disabled' : '') + '>' + esc(no || 'แลกเลย') + '</button></div></div>';
       }).join('') + '</div>' : '<div class="empty">ยังไม่มีของรางวัล</div>') +
-      '<p class="muted" style="font-size:12px;margin:0">แลกแล้วได้เป็นคูปอง ใช้ได้ภายใน 30 วัน</p>';
+      '<p class="muted" style="font-size:12px;margin:0">แลกแล้วได้เป็นคูปองในเมนู "คูปอง" ยื่นให้พนักงานสแกนตอนชำระเงิน</p>';
   }
   function historyView() {
     const body = S.hist === 'bills'
@@ -235,7 +238,8 @@
     let sheet = '';
     if (S.pick) {
       const r = S.rewards.find((x) => String(x.id) === String(S.pick)); const bal = S.me.wallets[S.brand].balance;
-      sheet = '<div class="scrim" data-a="unpick"></div><div class="sheet" role="dialog" aria-label="ยืนยันการแลก"><h3>ยืนยันแลก ' + esc(r.name) + '?</h3><span class="muted">ใช้ ' + fmt(r.points_cost) + ' แต้ม · คงเหลือ ' + fmt(bal - r.points_cost) + ' แต้ม · ได้รับเป็นคูปองใช้ได้ 30 วัน</span>' +
+      sheet = '<div class="scrim" data-a="unpick"></div><div class="sheet" role="dialog" aria-label="ยืนยันการแลก"><h3>ยืนยันแลก ' + esc(r.name) + '?</h3><span class="muted">ใช้ ' + fmt(r.points_cost) + ' แต้ม · คงเหลือ ' + fmt(bal - r.points_cost) + ' แต้ม · ได้รับเป็นคูปอง' + (r.kind === 'coupon' ? '' : 'ใช้ได้ ' + (r.valid_days || 30) + ' วัน') + '</span>' +
+        (r.description ? '<small class="muted" style="white-space:pre-line">' + esc(r.description) + '</small>' : '') +
         '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px"><button class="btn ghost" data-a="unpick">ยกเลิก</button><button class="btn" data-a="redeem">ยืนยันแลก</button></div></div>';
     }
     $app.innerHTML = dev + head(titles[S.tab] + ' · ' + brand().short_name) + '<main class="body">' + views[S.tab]() + '</main>' + (S.tab !== 'profile' ? nav() : '') + sheet;

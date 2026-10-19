@@ -259,13 +259,53 @@ export async function setConsent(db, memberId, brandId, marketing) {
 }
 
 /* ---------------- แลกแต้ม ---------------- */
+/* ---------------- ของรางวัล ---------------- */
+const TIER_NAMES = { SILVER: 'Silver', GOLD: 'Gold', PLATINUM: 'Platinum' };
+const PERIOD_NAMES = { day: 'วันนี้', week: 'สัปดาห์นี้', month: 'เดือนนี้', year: 'ปีนี้', all: '' };
+// ของรางวัลที่อยู่ในช่วงวันที่เปิดแลก (เวลาไทย) · คูปองที่ผูกไว้ต้องยังเปิดแจกอยู่
+const REWARD_SQL = `SELECT r.*, to_char(r.end_date, 'YYYY-MM-DD') AS end_day, t.discount_type, t.discount_value, t.min_spend, t.badge_big, t.valid_days, t.title AS coupon_title,
+    (${OPEN_TPL}) AS tpl_open
+  FROM rewards r JOIN coupon_templates t ON t.id = r.coupon_template_id`;
+const REWARD_OPEN = `r.is_active AND (r.start_date IS NULL OR r.start_date <= (now() AT TIME ZONE 'Asia/Bangkok')::date)
+  AND (r.end_date IS NULL OR r.end_date >= (now() AT TIME ZONE 'Asia/Bangkok')::date)`;
+// จำนวนครั้งที่สมาชิกแลกรางวัลนี้ในช่วงเวลาที่จำกัด (วัน/สัปดาห์/เดือน/ปี ตามเวลาไทย หรือทั้งหมด)
+async function redeemedCount(db, memberId, r) {
+  const since = r.limit_period === 'all' ? '' : ` AND created_at >= date_trunc('${r.limit_period}', now() AT TIME ZONE 'Asia/Bangkok') AT TIME ZONE 'Asia/Bangkok'`;
+  return (await db.one(`SELECT count(*)::int AS n FROM point_ledger WHERE member_id = $1 AND entry_type = 'redeem' AND ref_type = 'reward' AND ref_id = $2${since}`, [memberId, String(r.id)])).n;
+}
+// เหตุผลที่สมาชิกคนนี้แลกรางวัลนี้ไม่ได้ (null = แลกได้ ถ้าแต้มพอ) · tier = ระดับปัจจุบันของสมาชิก
+async function rewardProblem(db, r, { memberId, tier }) {
+  if (r.stock !== null && r.stock <= 0) return { code: 'out_of_stock', msg: 'ของรางวัลหมดแล้ว' };
+  if (r.kind === 'coupon' && !r.tpl_open) return { code: 'reward_closed', msg: 'คูปองของรางวัลนี้ปิดแจกแล้ว' };
+  if (r.tiers && r.tiers.length && tier && !r.tiers.includes(tier)) return { code: 'tier_required', msg: 'เฉพาะสมาชิกระดับ ' + r.tiers.map((x) => TIER_NAMES[x] || x).join(' / ') };
+  if (r.limit_count && memberId && (await redeemedCount(db, memberId, r)) >= r.limit_count) {
+    return { code: 'limit_reached', msg: 'แลกครบ ' + r.limit_count + ' ครั้ง' + (PERIOD_NAMES[r.limit_period] ? 'ใน' + PERIOD_NAMES[r.limit_period] : 'แล้ว') };
+  }
+  return null;
+}
+const tierNow = async (db, memberId, brandId) => (memberId ? (await walletsOf(db, memberId))[brandId]?.tier?.name : null);
+// รายการของรางวัลของแบรนด์สำหรับสมาชิกคนหนึ่ง (memberId ว่าง = ดูอย่างเดียว) · why = เหตุผลที่แลกไม่ได้
+export async function rewardsFor(db, { brandId, memberId }) {
+  const rows = await db.q(REWARD_SQL + ' WHERE r.brand_id = $1 AND ' + REWARD_OPEN + ' ORDER BY r.points_cost', [brandId]);
+  const tier = await tierNow(db, memberId, brandId);
+  const out = [];
+  for (const r of rows) {
+    const p = await rewardProblem(db, r, { memberId, tier });
+    out.push({ ...r, why: p ? p.msg : null });
+  }
+  return out;
+}
+
 export async function redeem(db, { memberId, rewardId, key }) {
-  const r = await db.one('SELECT * FROM rewards WHERE id = $1 FOR UPDATE', [rewardId]);
+  const r = await db.one(REWARD_SQL + ' WHERE r.id = $1 FOR UPDATE OF r', [rewardId]);
   if (!r || !r.is_active) throw notFound('ไม่พบของรางวัลนี้');
   const ikey = 'redeem:' + memberId + ':' + key;
   const dup = await db.one('SELECT id FROM point_ledger WHERE idempotency_key = $1', [ikey]);
   if (dup) return { duplicate: true, coupon: await db.one("SELECT * FROM member_coupons WHERE member_id = $1 AND source = 'redeem' AND source_ref = $2", [memberId, String(dup.id)]) };
-  if (r.stock !== null && r.stock <= 0) throw conflict('out_of_stock', 'ของรางวัลหมดแล้ว');
+  const open = await db.one('SELECT 1 FROM rewards r WHERE r.id = $1 AND ' + REWARD_OPEN, [r.id]);
+  if (!open) throw bad('reward_closed', 'ของรางวัลนี้ยังไม่เปิดแลกหรือหมดเวลาแลกแล้ว');
+  const p = await rewardProblem(db, r, { memberId, tier: await tierNow(db, memberId, r.brand_id) });
+  if (p) throw p.code === 'out_of_stock' || p.code === 'limit_reached' ? conflict(p.code, p.msg) : bad(p.code, p.msg);
   const d = await debit(db, { memberId, brandId: r.brand_id, type: 'redeem', points: r.points_cost, refType: 'reward', refId: String(r.id), key: ikey, note: 'แลก ' + r.name, actorType: 'member', actorId: memberId });
   if (r.stock !== null) await db.q('UPDATE rewards SET stock = stock - 1 WHERE id = $1', [r.id]);
   const coupon = await issueCoupon(db, { memberId, templateId: r.coupon_template_id, source: 'redeem', sourceRef: d.ledgerId });
@@ -316,10 +356,9 @@ export async function posWallet(db, { memberId, brandId, subtotal, ref }) {
   const sub = Math.max(0, Number(subtotal) || 0);
   const cs = await db.q(COUPON_CHECK_SQL + " WHERE c.member_id = $1 AND c.status = 'ready' AND c.expires_at > now() AND (c.brand_id = $2 OR c.brand_id IS NULL) ORDER BY c.expires_at", [memberId, brandId]);
   const coupons = cs.map((c) => couponOut(c, couponProblem(c, { memberId, brandId, subtotal: sub, dow, ref }), sub));
-  const rewards = (await db.q(`SELECT r.id, r.name, r.category, r.points_cost, r.stock, t.discount_type, t.discount_value, t.min_spend, t.badge_big
-      FROM rewards r JOIN coupon_templates t ON t.id = r.coupon_template_id WHERE r.brand_id = $1 AND r.is_active ORDER BY r.points_cost`, [brandId]))
+  const rewards = (await rewardsFor(db, { brandId, memberId }))
     .map((r) => ({ id: r.id, name: r.name, cost: r.points_cost, big: r.badge_big, value: Number(r.discount_value), minSpend: Number(r.min_spend),
-      outOfStock: r.stock !== null && r.stock <= 0, affordable: r.points_cost <= balance && !(r.stock !== null && r.stock <= 0) }));
+      outOfStock: r.stock !== null && r.stock <= 0, why: r.why, affordable: r.points_cost <= balance && !r.why }));
   return { balance, coupons, rewards };
 }
 

@@ -106,7 +106,7 @@
   async function load() {
     const b = S.brand; const d = S.data;
     if (S.page === 'dash') d.dash = await api('GET', '/api/admin/dashboard?brand=' + b);
-    if (S.page === 'rewards') d.rewards = await api('GET', '/api/admin/rewards');
+    if (S.page === 'rewards') [d.rewards, d.tpls] = await Promise.all([api('GET', '/api/admin/rewards'), api('GET', '/api/admin/coupon-templates?brand=' + b)]);
     if (S.page === 'coupons') d.coupons = await api('GET', '/api/admin/coupon-templates?brand=' + b);
     if (S.page === 'rules') d.rules = await api('GET', '/api/admin/earn-rules');
     if (S.page === 'members') { d.members = await api('GET', '/api/admin/members?brand=' + b + '&q=' + encodeURIComponent(S.q)); if (S.member) await openMember(S.member.member.id); }
@@ -136,6 +136,7 @@
       '</div>' + views[S.page]() + '</main></div>' + (S.edit ? dialog() : '');
     const auto = document.querySelector('[data-autofocus]'); if (auto) auto.focus();
     const cf = document.querySelector('form[data-f="coupon"]'); if (cf) syncCoupon(cf);
+    const rf = document.querySelector('form[data-f="reward"]'); if (rf) syncReward(rf);
   }
 
   function dashView() {
@@ -150,31 +151,83 @@
       '</tbody></table></div></div>';
   }
 
+  const TIERS = [['SILVER', 'Silver'], ['GOLD', 'Gold'], ['PLATINUM', 'Platinum']];
+  const PERIODS = [['day', 'วัน'], ['week', 'สัปดาห์'], ['month', 'เดือน'], ['year', 'ปี'], ['all', 'ตลอดรายการ']];
+  const today = () => new Date(Date.now() + 7 * 36e5).toISOString().slice(0, 10);
+  function rewardState(r) {
+    if (!r.is_active) return '<span class="pill off">ปิด</span>';
+    if (r.stock !== null && r.stock <= 0) return '<span class="pill warn">หมด</span>';
+    if (r.start_day && r.start_day > today()) return '<span class="pill warn">เริ่ม ' + date(r.start_day + 'T12:00:00+07:00') + '</span>';
+    if (r.end_day && r.end_day < today()) return '<span class="pill off">หมดเวลา</span>';
+    return '<span class="pill">เปิดแลก</span>';
+  }
   function rewardsView() {
     const list = (S.data.rewards || []).filter((r) => r.brand_id === S.brand);
-    return '<div class="note">ลูกค้ากดแลกในหน้าสมาชิก (เมนู "แลกแต้ม") แล้วได้คูปองไปยื่นที่ร้าน · แก้ชื่อหรือส่วนลดแล้ว คูปองที่ลูกค้าแลกไปก่อนหน้ายังใช้ตามเงื่อนไขเดิม</div>' +
+    return '<div class="note">ลูกค้ากดแลกในหน้าสมาชิก (เมนู "แลกแต้ม") หรือที่หน้าร้าน แล้วได้คูปองไปใช้ · แบบ "คูปอง" แลกเป็นคูปองที่สร้างไว้ในเมนูคูปอง</div>' +
       '<div class="card"><div class="hd"><h2>ของรางวัล ' + esc(brand().name) + '</h2><button class="btn" data-a="editReward" data-v="new">+ เพิ่มของรางวัล</button></div>' +
-      (list.length ? '<div class="wrap"><table class="tbl"><thead><tr><th>ของรางวัล</th><th>หมวด</th><th class="r">ใช้แต้ม</th><th class="r">มูลค่า</th><th class="r">คงเหลือ</th><th class="r">แลกแล้ว</th><th>สถานะ</th><th></th></tr></thead><tbody>' +
-        list.map((r) => '<tr class="' + (r.is_active ? '' : 'off') + '"><td><b>' + esc(r.name) + '</b></td><td>' + (CATS[r.category] || esc(r.category)) + '</td><td class="r num">' + fmt(r.points_cost) + '</td>' +
-          '<td class="r num">' + (Number(r.discount_value) ? disc(r.discount_type, r.discount_value) : '-') + '</td><td class="r num">' + (r.stock === null ? 'ไม่จำกัด' : fmt(r.stock)) + '</td><td class="r num">' + fmt(r.redeemed) + '</td>' +
-          '<td>' + (r.is_active ? (r.stock !== null && r.stock <= 0 ? '<span class="pill warn">หมด</span>' : '<span class="pill">เปิดแลก</span>') : '<span class="pill off">ปิด</span>') + '</td>' +
+      (list.length ? '<div class="wrap"><table class="tbl"><thead><tr><th>ของรางวัล</th><th>ประเภท</th><th class="r">ใช้แต้ม</th><th>ระดับ</th><th class="r">คงเหลือ</th><th>จำกัดต่อคน</th><th class="r">แลกแล้ว</th><th>สถานะ</th><th></th></tr></thead><tbody>' +
+        list.map((r) => '<tr class="' + (r.is_active ? '' : 'off') + '"><td><div class="rw-name">' + (r.image_id ? '<img alt="" src="/api/public/coupon-images/' + r.image_id + '">' : '') + '<b>' + esc(r.name) + '</b></div></td>' +
+          '<td>' + (r.kind === 'coupon' ? 'คูปอง · ' + esc(r.coupon_title || '') : (CATS[r.category] || esc(r.category)) + (Number(r.discount_value) ? ' · ' + disc(r.discount_type, r.discount_value) : '')) + '</td>' +
+          '<td class="r num">' + fmt(r.points_cost) + '</td><td>' + (r.tiers && r.tiers.length ? r.tiers.map((t) => (TIERS.find((x) => x[0] === t) || [t, t])[1]).join(', ') : 'ทุกระดับ') + '</td>' +
+          '<td class="r num">' + (r.stock === null ? 'ไม่จำกัด' : fmt(r.stock)) + '</td><td>' + (r.limit_count ? r.limit_count + ' ครั้ง / ' + PERIODS.find((x) => x[0] === r.limit_period)[1] : 'ไม่จำกัด') + '</td>' +
+          '<td class="r num">' + fmt(r.redeemed) + '</td><td>' + rewardState(r) + '</td>' +
           '<td class="r"><button class="btn ghost sm" data-a="editReward" data-v="' + r.id + '">แก้ไข</button></td></tr>').join('') + '</tbody></table></div>'
         : '<p class="muted">ยังไม่มีของรางวัล กด "เพิ่มของรางวัล"</p>') + '</div>';
   }
   function rewardForm(r) {
-    const isNew = !r; r = r || { name: '', category: 'food', points_cost: '', discount_type: 'baht', discount_value: '', min_spend: 0, valid_days: 30, stock: null, is_active: true };
-    return '<form class="grid" data-f="reward" data-v="' + (isNew ? 'new' : r.id) + '">' +
-      '<div class="field" style="grid-column:1/-1"><label for="f-name">ชื่อของรางวัล</label><input id="f-name" name="name" value="' + esc(r.name) + '" required data-autofocus></div>' +
-      '<div class="field"><label for="f-cat">หมวด</label><select id="f-cat" name="cat">' + Object.entries(CATS).map(([k, v]) => '<option value="' + k + '"' + (r.category === k ? ' selected' : '') + '>' + v + '</option>').join('') + '</select></div>' +
-      '<div class="field"><label for="f-cost">ใช้แต้ม</label><input id="f-cost" name="cost" type="number" min="1" inputmode="numeric" value="' + esc(r.points_cost) + '" required></div>' +
-      '<div class="field"><label for="f-type">แบบส่วนลด</label><select id="f-type" name="type"><option value="baht"' + (r.discount_type !== 'pct' ? ' selected' : '') + '>ลดเป็นบาท</option><option value="pct"' + (r.discount_type === 'pct' ? ' selected' : '') + '>ลดเป็น %</option></select></div>' +
-      '<div class="field"><label for="f-val">มูลค่า</label><input id="f-val" name="value" type="number" min="0" step="0.01" value="' + esc(Number(r.discount_value) || '') + '"><span class="hint">ของฟรี: ใส่ราคาของชิ้นนั้น (ใช้เป็นส่วนลดตอนปิดบิล)</span></div>' +
-      '<div class="field"><label for="f-min">ยอดซื้อขั้นต่ำ (บาท)</label><input id="f-min" name="min" type="number" min="0" value="' + esc(Number(r.min_spend) || 0) + '"></div>' +
-      '<div class="field"><label for="f-days">คูปองใช้ได้ (วัน)</label><input id="f-days" name="days" type="number" min="1" max="365" value="' + esc(r.valid_days || 30) + '"></div>' +
-      '<div class="field"><label for="f-stock">จำนวนคงเหลือ</label><input id="f-stock" name="stock" type="number" min="0" placeholder="ไม่จำกัด" value="' + (r.stock === null ? '' : esc(r.stock)) + '"><span class="hint">เว้นว่าง = ไม่จำกัด</span></div>' +
-      '<label class="check"><input type="checkbox" name="active"' + (r.is_active ? ' checked' : '') + '>เปิดให้แลก</label>' +
-      (S.err ? '<div class="err" role="alert" style="grid-column:1/-1">' + esc(S.err) + '</div>' : '') +
-      '<div class="actions"><button class="btn">' + (isNew ? 'เพิ่มของรางวัล' : 'บันทึก') + '</button><button type="button" class="btn ghost" data-a="close">ยกเลิก</button>' + (isNew ? '' : '<button type="button" class="btn danger" style="margin-left:auto" data-a="delReward" data-v="' + r.id + '">ลบของรางวัล</button>') + '</div></form>';
+    const isNew = !r;
+    r = r || { name: '', kind: 'general', category: 'food', points_cost: '', description: '', discount_type: 'baht', discount_value: '', min_spend: 0, valid_days: 30, stock: null, is_active: true, tiers: null, limit_count: null, limit_period: 'day', start_day: '', end_day: '' };
+    const tpls = (S.data.tpls || []).filter((t) => t.is_active && t.kind !== 'internal');
+    const row = (label, html, forId) => '<div class="rw-row"><label' + (forId ? ' for="' + forId + '"' : '') + '>' + label + '</label><div>' + html + '</div></div>';
+    const radio = (name, val, cur, text) => '<label class="check"><input type="radio" name="' + name + '" value="' + val + '"' + (cur === val ? ' checked' : '') + '>' + text + '</label>';
+    const tiers = r.tiers && r.tiers.length ? r.tiers : TIERS.map((t) => t[0]);
+    return '<form class="rw-ed" data-f="reward" data-v="' + (isNew ? 'new' : r.id) + '">' +
+      '<div class="rw-img"><div class="upl-img sq" id="rw-img">' + (S.edit.imageUrl ? '<img alt="" src="' + esc(S.edit.imageUrl) + '">' : '<span>+ เพิ่มรูป</span>') + '</div>' +
+        '<div class="upl-side"><label class="btn ghost sm" for="rw-file">เลือกรูป</label><input id="rw-file" type="file" accept="image/png,image/jpeg,image/gif,image/webp" class="sr">' +
+        (S.edit.imageUrl ? '<button type="button" class="btn ghost sm" data-a="dropRewardImage">ลบรูป</button>' : '') +
+        '<span class="hint">ขนาดรูปที่แนะนำ 960 × 960 px · PNG, JPG, GIF · ระบบย่อรูปให้อัตโนมัติ</span></div></div>' +
+      '<div class="rw-fields">' +
+        row('ชื่อ*', '<input id="rw-name" name="name" value="' + esc(r.name) + '" required maxlength="80" data-autofocus>', 'rw-name') +
+        row('จำนวนแต้ม*', '<input id="rw-cost" name="cost" type="number" min="1" inputmode="numeric" value="' + esc(r.points_cost) + '" required>', 'rw-cost') +
+        row('รายละเอียด', '<textarea id="rw-desc" name="description" maxlength="1000" placeholder="เช่น เลือกเมนูข้าวมันไก่ได้ 1 จาน ไม่ร่วมกับโปรโมชั่นอื่น">' + esc(r.description || '') + '</textarea>', 'rw-desc') +
+        row('ระดับ', '<div class="rw-inline">' + TIERS.map((t) => '<label class="check"><input type="checkbox" name="tier_' + t[0] + '"' + (tiers.includes(t[0]) ? ' checked' : '') + '>' + t[1] + '</label>').join('') + '</div>') +
+        row('จำนวนในคลัง', '<div class="rw-inline">' + radio('stockMode', 'none', r.stock === null ? 'none' : 'set', 'ไม่ตั้งค่าจำนวน') + radio('stockMode', 'set', r.stock === null ? 'none' : 'set', 'ตั้งค่าจำนวน') +
+          '<input name="stock" type="number" min="0" class="sm-in" aria-label="จำนวนในคลัง" value="' + (r.stock === null ? '' : esc(r.stock)) + '"></div>') +
+        row('จำกัดต่อผู้ใช้', '<div class="rw-inline">' + radio('limitMode', 'none', r.limit_count ? 'set' : 'none', 'ไม่จำกัดจำนวน') + radio('limitMode', 'set', r.limit_count ? 'set' : 'none', '') +
+          '<input name="limitCount" type="number" min="1" class="sm-in" aria-label="จำนวนครั้งต่อคน" value="' + esc(r.limit_count || '') + '"> ครั้ง / <select name="limitPeriod" aria-label="ต่อช่วงเวลา">' +
+          PERIODS.map((x) => '<option value="' + x[0] + '"' + ((r.limit_period || 'day') === x[0] ? ' selected' : '') + '>' + x[1] + '</option>').join('') + '</select></div>') +
+        row('ประเภท', '<div class="segr">' + [['general', 'ทั่วไป'], ['coupon', 'คูปอง']].map((k) => '<label><input type="radio" name="kind" value="' + k[0] + '"' + ((r.kind || 'general') === k[0] ? ' checked' : '') + '><span>' + k[1] + '</span></label>').join('') + '</div>') +
+        '<div data-rk="general">' +
+          row('หมวด', '<select id="rw-cat" name="cat">' + Object.entries(CATS).map(([k, v]) => '<option value="' + k + '"' + (r.category === k ? ' selected' : '') + '>' + v + '</option>').join('') + '</select>', 'rw-cat') +
+          row('มูลค่า (บาท/%)', '<div class="rw-inline"><input id="rw-val" name="value" type="number" min="0" step="0.01" class="sm-in" value="' + esc(Number(r.discount_value) || '') + '"><select name="type" aria-label="แบบส่วนลด"><option value="baht"' + (r.discount_type !== 'pct' ? ' selected' : '') + '>บาท</option><option value="pct"' + (r.discount_type === 'pct' ? ' selected' : '') + '>%</option></select></div><span class="hint">ของฟรี: ใส่ราคาของชิ้นนั้น (ใช้เป็นส่วนลดตอนปิดบิล) · % ใช้กับหมวดส่วนลด</span>', 'rw-val') +
+          row('ยอดซื้อขั้นต่ำ', '<input id="rw-min" name="min" type="number" min="0" class="sm-in" value="' + esc(Number(r.min_spend) || 0) + '"> บาท', 'rw-min') +
+          row('คูปองใช้ได้', '<input id="rw-days" name="days" type="number" min="1" max="365" class="sm-in" value="' + esc(r.valid_days || 30) + '"> วันหลังแลก', 'rw-days') +
+        '</div>' +
+        '<div data-rk="coupon">' +
+          row('คูปองที่ได้', tpls.length ? '<select id="rw-tpl" name="templateId"><option value="">— เลือกคูปอง —</option>' + tpls.map((t) => '<option value="' + t.id + '"' + (r.kind === 'coupon' && String(r.coupon_template_id) === String(t.id) ? ' selected' : '') + '>' + esc(t.title) + ' (' + esc(t.badge_big) + ')</option>').join('') + '</select><span class="hint">แลกแล้วลูกค้าได้คูปองนี้ ใช้ตามเงื่อนไขที่ตั้งในเมนูคูปอง</span>'
+            : '<span class="hint">ยังไม่มีคูปองที่เปิดอยู่ สร้างในเมนู "คูปอง" ก่อน</span>', 'rw-tpl') +
+        '</div>' +
+        row('เริ่ม', '<input id="rw-start" name="startDate" type="date" value="' + esc(r.start_day || '') + '">', 'rw-start') +
+        row('หมดอายุ', '<input id="rw-end" name="endDate" type="date" value="' + esc(r.end_day || '') + '"><span class="hint">ไม่ต้องระบุ หากรางวัลไม่มีวันหมดอายุ</span>', 'rw-end') +
+        row('', '<label class="check"><input type="checkbox" name="active"' + (r.is_active ? ' checked' : '') + '>เปิดให้แลก</label>') +
+        '<div class="err" id="c-err" role="alert"' + (S.err ? '>' + esc(S.err) : ' hidden>') + '</div>' +
+        '<div class="actions"><button class="btn">' + (isNew ? 'เพิ่มของรางวัล' : 'บันทึก') + '</button><button type="button" class="btn ghost" data-a="close">ยกเลิก</button>' + (isNew ? '' : '<button type="button" class="btn danger" style="margin-left:auto" data-a="delReward" data-v="' + r.id + '">ลบของรางวัล</button>') + '</div>' +
+      '</div></form>';
+  }
+  // ซ่อน/แสดงช่องตามประเภท และช่องจำนวนตามตัวเลือก
+  function syncReward(el) {
+    const kind = (el.querySelector('input[name="kind"]:checked') || {}).value || 'general';
+    el.querySelectorAll('[data-rk]').forEach((x) => { x.hidden = x.dataset.rk !== kind; });
+    const stockSet = (el.querySelector('input[name="stockMode"]:checked') || {}).value === 'set';
+    const limSet = (el.querySelector('input[name="limitMode"]:checked') || {}).value === 'set';
+    el.elements.stock.disabled = !stockSet; el.elements.limitCount.disabled = !limSet; el.elements.limitPeriod.disabled = !limSet;
+  }
+  function rerenderRewardImage() {
+    const box = document.getElementById('rw-img'); if (!box) return;
+    box.innerHTML = S.edit.imageUrl ? '<img alt="" src="' + esc(S.edit.imageUrl) + '">' : '<span>+ เพิ่มรูป</span>';
+    const side = box.parentNode.querySelector('.upl-side'); const drop = side.querySelector('[data-a="dropRewardImage"]');
+    if (S.edit.imageUrl && !drop) side.querySelector('label').insertAdjacentHTML('afterend', '<button type="button" class="btn ghost sm" data-a="dropRewardImage">ลบรูป</button>');
+    if (!S.edit.imageUrl && drop) drop.remove();
   }
 
   const KINDS = [
@@ -474,7 +527,7 @@
     if (e.kind === 'staff') { title = e.id ? 'แก้ไขผู้ใช้ ' + e.id : 'เพิ่มผู้ใช้'; body = staffForm(e.id); }
     if (e.kind === 'branch') { title = e.id ? 'แก้ไขสาขา ' + e.id : 'เพิ่มสาขา · ' + brand().name; body = branchForm(e.id); }
     if (e.kind === 'staffpw') { title = 'ตั้งรหัสผ่านใหม่ให้ ' + e.id; body = staffPwForm(e.id); }
-    return '<div class="scrim" data-a="close"></div><div class="dialog' + (e.kind === 'coupon' ? ' wide' : '') + '" role="dialog" aria-modal="true" aria-label="' + esc(title) + '"><h2>' + esc(title) + '</h2>' + body + '</div>';
+    return '<div class="scrim" data-a="close"></div><div class="dialog' + (e.kind === 'coupon' || e.kind === 'reward' ? ' wide' : '') + '" role="dialog" aria-modal="true" aria-label="' + esc(title) + '"><h2>' + esc(title) + '</h2>' + body + '</div>';
   }
 
   /* ---------- การกด ---------- */
@@ -484,7 +537,11 @@
     page: async (v) => { S.page = v; S.edit = null; S.err = ''; S.member = null; await load(); window.scrollTo(0, 0); },
     brand: async (v) => { S.brand = v; store.set('crm-admin-brand', v); S.member = null; applyTheme(); await load(); },
     close: () => { S.edit = null; S.err = ''; render(); },
-    editReward: (v) => { S.edit = { kind: 'reward', id: v }; S.err = ''; render(); },
+    editReward: (v) => {
+      const r = v === 'new' ? null : S.data.rewards.find((x) => String(x.id) === String(v));
+      S.edit = { kind: 'reward', id: v, imageId: r ? r.image_id : null, imageUrl: r && r.image_id ? '/api/public/coupon-images/' + r.image_id : null }; S.err = ''; render();
+    },
+    dropRewardImage: () => { S.edit.imageId = null; S.edit.imageUrl = null; rerenderRewardImage(); },
     editBranch: (v) => { S.edit = { kind: 'branch', id: v || null }; S.err = ''; render(); },
     delBranch: async (v) => {
       if (!confirm('ลบสาขา ' + v + ' ถาวร?')) return;
@@ -545,7 +602,14 @@
       } catch (e) { loginView(e.message); }
     },
     reward: async (o, id) => {
-      const body = { brand: S.brand, name: o.name, cat: o.cat, cost: o.cost, type: o.type, value: o.value || 0, min: o.min || 0, days: o.days, stock: o.stock === '' ? null : o.stock, active: o.active };
+      const el = document.querySelector('form[data-f="reward"]');
+      const pick = (n) => (el.querySelector('input[name="' + n + '"]:checked') || {}).value;
+      const stockSet = pick('stockMode') === 'set'; const limSet = pick('limitMode') === 'set';
+      if (stockSet && o.stock === '') throw new Error('ใส่จำนวนในคลัง หรือเลือก "ไม่ตั้งค่าจำนวน"');
+      if (limSet && !(Number(o.limitCount) > 0)) throw new Error('ใส่จำนวนครั้งที่แลกได้ต่อคน หรือเลือก "ไม่จำกัดจำนวน"');
+      const body = { brand: S.brand, kind: pick('kind') || 'general', name: o.name, description: o.description, imageId: S.edit.imageId || null, cat: o.cat, cost: o.cost, type: o.type, value: o.value || 0, min: o.min || 0, days: o.days,
+        templateId: o.templateId || null, stock: stockSet ? o.stock : null, limitCount: limSet ? o.limitCount : null, limitPeriod: limSet ? o.limitPeriod : 'all',
+        tiers: TIERS.map((t) => t[0]).filter((t) => o['tier_' + t]), startDate: o.startDate || null, endDate: o.endDate || null, active: o.active };
       if (id === 'new') await api('POST', '/api/admin/rewards', body); else await api('PATCH', '/api/admin/rewards/' + id, body);
       S.edit = null; toast('บันทึกของรางวัลแล้ว'); await load();
     },
@@ -623,6 +687,18 @@
     guard(() => fn(form(el), el.dataset.v, el), true);
   });
   document.addEventListener('input', (e) => { const f = e.target.closest && e.target.closest('form[data-f="coupon"]'); if (f) syncCoupon(f); });
+  document.addEventListener('change', async (e) => {
+    const f = e.target.closest && e.target.closest('form[data-f="reward"]'); if (!f) return;
+    syncReward(f);
+    if (e.target.id !== 'rw-file' || !e.target.files[0]) return;
+    const box = document.getElementById('rw-img'); box.innerHTML = '<span>กำลังอัปโหลด…</span>';
+    try {
+      const dataUrl = await shrinkImage(e.target.files[0]);
+      const r = await api('POST', '/api/admin/coupon-images', { dataUrl, brand: S.brand });
+      S.edit.imageId = r.id; S.edit.imageUrl = r.url;
+    } catch (err) { if (!err.silent) toast(err.message); }
+    e.target.value = ''; rerenderRewardImage();
+  });
   document.addEventListener('change', async (e) => {
     const f = e.target.closest && e.target.closest('form[data-f="coupon"]');
     if (f) syncCoupon(f);

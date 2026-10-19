@@ -148,3 +148,24 @@ details.adv[open] > *:not(summary) { margin-bottom: 12px; }
 .rules-foot { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; border-top: 1px solid var(--line); padding-top: 16px; }
 @media (max-width: 1000px) { .rsec { grid-template-columns: 1fr; } }
 @media (max-width: 640px) { .rgrid { grid-template-columns: repeat(2, minmax(0, 1fr)); } .rgrid .check { grid-column: 1 / -1; margin-top: 0; } }
+
+/* ของรางวัล: รูปซ้าย ช่องกรอกขวา (หัวข้อชิดขวาเหมือนฟอร์มทั่วไป) */
+.rw-ed { display: grid; grid-template-columns: 240px 1fr; gap: 24px; }
+.rw-img { display: flex; flex-direction: column; gap: 10px; }
+.upl-img.sq { width: 100%; aspect-ratio: 1 / 1; font-size: 15px; }
+.rw-fields { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.rw-fields [data-rk] { display: flex; flex-direction: column; gap: 10px; }
+.rw-fields [data-rk][hidden] { display: none; }
+.rw-row { display: grid; grid-template-columns: 120px 1fr; gap: 12px; align-items: center; }
+.rw-row > label { font-size: 13px; font-weight: 600; color: var(--muted); text-align: right; }
+.rw-row input:not([type=checkbox]):not([type=radio]), .rw-row select, .rw-row textarea { min-height: 38px; border: 1px solid var(--line); border-radius: 10px; padding: 7px 10px; background: #fff; max-width: 100%; }
+.rw-row input[name=name], .rw-row textarea, .rw-row select[name=templateId] { width: 100%; }
+.rw-row textarea { min-height: 90px; resize: vertical; }
+.rw-row .hint { display: block; font-size: 12px; color: var(--muted); margin-top: 4px; }
+.rw-row input:disabled, .rw-row select:disabled { opacity: .45; }
+.rw-inline { display: flex; align-items: center; gap: 8px 14px; flex-wrap: wrap; }
+.rw-inline .check { min-height: 32px; }
+.sm-in { width: 90px; }
+.rw-name { display: flex; align-items: center; gap: 8px; }
+.rw-name img { width: 36px; height: 36px; border-radius: 8px; object-fit: cover; }
+@media (max-width: 760px) { .rw-ed { grid-template-columns: 1fr; } .rw-img { max-width: 220px; } .rw-row { grid-template-columns: 1fr; gap: 4px; } .rw-row > label { text-align: left; } }
