@@ -492,3 +492,34 @@ t('แต้มรีวิวร้านในแชท LINE: ตั้งค�
   assert.equal((await call('PATCH', '/api/admin/brands/humlai/review', { reviewPoints: 0 }, adm)).data.review_points, 0);
   await call('PATCH', '/api/admin/brands/humlai/review', { reviewPoints: 5 }, adm);
 });
+
+t('POS สแกน QR คูปอง: ได้สมาชิกและคูปองในครั้งเดียว', async () => {
+  const u = { 'x-dev-line-user': 'Ucpscan000000000000000000000001' };
+  await call('POST', '/api/liff/register', { brand: 'humlai', name: 'สแกนคูปอง', phone: '0866660000', privacy: true }, u);
+  const mid = (await call('GET', '/api/liff/me', undefined, u)).data.member.id;
+  const tpl = await mods.db.one(`SELECT id FROM coupon_templates t WHERE brand_id = 'humlai' AND t.is_active AND (t.issue_from IS NULL OR t.issue_from <= now())
+    AND (t.issue_to IS NULL OR t.issue_to >= now()) AND (t.valid_to IS NULL OR t.valid_to > now()) ORDER BY id LIMIT 1`);
+  const adm = { authorization: 'Bearer ' + (await call('POST', '/api/admin/login', { username: 'S003', password: 'demo1234' })).data.token };
+  const gift = await call('POST', '/api/admin/members/' + mid + '/coupons', { templateId: tpl.id }, adm);
+  assert.equal(gift.status, 200, JSON.stringify(gift.data));
+  const code = gift.data.code;
+
+  const r = await call('POST', '/api/pos/members/resolve', { query: 'CP.' + code }, posHL01);
+  assert.equal(r.status, 200, JSON.stringify(r.data));
+  assert.equal(r.data.member.id, mid);
+  assert.equal(r.data.scannedCoupon.id, gift.data.couponId);
+  assert.equal(r.data.scannedCoupon.code, code);
+  // พิมพ์รหัสคูปองเอง (ตัวเล็กก็ได้) เหมือนสแกน
+  const r2 = await call('POST', '/api/pos/members/resolve', { query: code.toLowerCase() }, posHL01);
+  assert.equal(r2.data.member.id, mid);
+  assert.equal(r2.data.scannedCoupon.id, gift.data.couponId);
+  // ใช้แล้ว → ยังได้สมาชิก แต่บอกว่าใช้ไม่ได้
+  await mods.db.q("UPDATE member_coupons SET status = 'used', used_at = now() WHERE id = $1", [gift.data.couponId]);
+  const r3 = await call('POST', '/api/pos/members/resolve', { query: 'CP.' + code }, posHL01);
+  assert.equal(r3.data.member.id, mid);
+  assert.equal(r3.data.scannedCoupon.usable, false);
+  assert.equal(r3.data.scannedCoupon.reason, 'คูปองนี้ใช้ไปแล้ว');
+  assert.equal((await call('POST', '/api/pos/members/resolve', { query: 'CP.ZZ-NONE99' }, posHL01)).status, 404);
+  // QR บัตรสมาชิก / เบอร์โทร ไม่มี scannedCoupon
+  assert.equal((await call('POST', '/api/pos/members/resolve', { query: '0866660000' }, posHL01)).data.scannedCoupon, null);
+});

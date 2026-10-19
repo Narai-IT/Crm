@@ -7,12 +7,19 @@ import * as core from '../services/core.js';
 import { COUPON_SQL, couponView } from './liff.js';
 
 export default function (r) {
-  // ระบุสมาชิกจาก QR (หมุนทุก 60 วิ) / เลขสมาชิก / เบอร์โทร
+  // ระบุสมาชิกจาก QR บัตรสมาชิก (หมุนทุก 60 วิ) / QR คูปอง (CP.HL-7JCQ หรือรหัสคูปอง) / เลขสมาชิก / เบอร์โทร
+  // สแกนคูปอง = ได้ทั้งสมาชิก (สะสมแต้ม) และคูปองที่จะใช้กับบิลนี้ (scannedCoupon)
   r.post('/api/pos/members/resolve', async (req, body) => {
     const t = await posTerminal(req);
-    let m = null;
+    let m = null; let scanned = null;
     const qv = String(body.qrToken || body.query || '').trim();
-    if (qv.startsWith('QR.')) {
+    const cpCode = /^(CP\.)?([A-Z0-9]{2}-[A-Z0-9]{4,8})$/i.exec(qv);
+    if (cpCode) {
+      const c = await one('SELECT id, code, member_id FROM member_coupons WHERE code = $1', [cpCode[2].toUpperCase()]);
+      if (!c) throw notFound('ไม่พบคูปอง ' + cpCode[2].toUpperCase());
+      m = await one("SELECT * FROM members WHERE id = $1 AND status = 'active'", [c.member_id]);
+      scanned = String(c.id);
+    } else if (qv.startsWith('QR.')) {
       const qr = readQrToken(qv);
       if (!qr) throw bad('qr_invalid', 'QR ไม่ถูกต้อง');
       if (qr.expired) throw new HttpError(410, 'qr_expired', 'QR หมดอายุ ให้ลูกค้าเปิดบัตรใหม่');
@@ -26,8 +33,17 @@ export default function (r) {
     await tx((db) => core.autoIssue(db, m.id, t.brandId));
     const w = (await core.walletsOf({ q, one }, m.id));
     const coupons = (await q(COUPON_SQL + " WHERE c.member_id = $1 AND c.status = 'ready' AND c.expires_at > now() AND (c.brand_id = $2 OR c.brand_id IS NULL) ORDER BY c.expires_at", [m.id, t.brandId])).map(couponView);
+    // คูปองที่สแกนใช้ไม่ได้แล้ว (ใช้ไป/หมดอายุ/คนละแบรนด์) → บอกเหตุผล แต่ยังได้สมาชิกไปสะสมแต้ม
+    let scannedCoupon = null;
+    if (scanned) {
+      const sc = await one(COUPON_SQL + ' WHERE c.id = $1', [scanned]);
+      const v = couponView(sc);
+      const ok = coupons.some((x) => x.id === v.id);
+      scannedCoupon = { id: v.id, code: v.code, title: v.title, usable: ok,
+        reason: ok ? null : v.status === 'used' ? 'คูปองนี้ใช้ไปแล้ว' : v.status === 'expired' ? 'คูปองนี้หมดอายุแล้ว' : 'คูปองนี้ใช้กับร้านนี้ไม่ได้' };
+    }
     return { member: { id: m.id, name: m.full_name, phone: maskPhone(m.phone) }, brand: t.brandId, balance: w[t.brandId].balance, tier: w[t.brandId].tier.name,
-      otherBrands: Object.fromEntries(Object.entries(w).filter(([b]) => b !== t.brandId).map(([b, x]) => [b, x.balance])), coupons };
+      otherBrands: Object.fromEntries(Object.entries(w).filter(([b]) => b !== t.brandId).map(([b, x]) => [b, x.balance])), coupons, scannedCoupon };
   }, (b, out) => out?.member?.id || '');
 
   // บิลชำระสำเร็จ · posBillId ใช้เป็น idempotency key: ส่งซ้ำได้ ไม่ให้แต้มซ้ำ
