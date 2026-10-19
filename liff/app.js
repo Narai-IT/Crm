@@ -52,7 +52,7 @@
     $app.innerHTML = '<div class="center"><h2>' + esc(title) + '</h2><p class="muted">' + esc(detail || '') + '</p>' + (retry ? '<button class="btn" data-a="reload">ลองอีกครั้ง</button>' : '') + '</div>';
   }
 
-  // เปิดจากปุ่ม "สมัครสมาชิก" ที่หน้าลูกค้าสั่งเอง: ?branch= เลือกสาขาประจำให้ (คูปองต้อนรับตามสาขา) · ?from=kiosk บอกให้กลับไปสั่งอาหารต่อหลังสมัคร
+  // เปิดจากปุ่ม "สมัครสมาชิก" ที่หน้าลูกค้าสั่งเอง: ?branch= เลือกสาขาที่สมัครให้ (คูปองต้อนรับตามสาขา) · ?from=kiosk บอกให้กลับไปสั่งอาหารต่อหลังสมัคร
   function joinParams(p) {
     const br = p.get('branch'); const b = S.brands.find((x) => x.id === S.brand);
     if (br && b && b.branches.some((x) => x.id === br)) S.reg.branchId = br;
@@ -145,7 +145,7 @@
     const ready = S.coupons.filter((c) => c.status === 'ready').sort((x, y) => x.expiresAt - y.expiresAt);
     const canRedeem = S.rewards.filter((r) => r.points_cost <= w.balance).length;
     return (S.joined ? '<div class="card joined" role="status"><b>✅ สมัครเรียบร้อย</b><span>กลับไปหน้าสั่งอาหาร แล้วใส่เบอร์ <b class="num">' + esc(S.joined) + '</b> หรือเลขที่สมาชิกด้านล่าง เพื่อสะสมแต้มบิลนี้</span></div>' : '') +
-      '<div class="card idcard"><span class="muted" style="font-size:13px">คุณ' + esc(m.name) + ' · สาขาประจำ ' + esc(branchName(m.homeBranch)) + '</span>' +
+      '<div class="card idcard"><span class="muted" style="font-size:13px">คุณ' + esc(m.name) + ' · สาขาที่สมัคร ' + esc(branchName(m.homeBranch)) + '</span>' +
       '<span style="font-size:12px;font-weight:600;color:var(--ai)">เลขที่สมาชิก</span><div class="row"><span class="id">' + esc(m.id) + '</span><button class="btn sm" data-a="copy" data-v="' + esc(m.id) + '">คัดลอก</button></div></div>' +
       '<div class="wallet"><div class="row" style="justify-content:flex-start"><span class="tier ' + t.name + '">' + t.name + '</span><small>' + esc(b.short_name) + ' · สมาชิกตั้งแต่ ' + date(m.joinedAt) + '</small></div>' +
       '<div><small>แต้ม ' + esc(b.short_name) + ' ที่ใช้ได้</small><div><span class="pts num">' + fmt(w.balance) + '</span> แต้ม</div></div>' +
@@ -196,7 +196,7 @@
   function profileView() {
     const m = S.me.member; const links = S.me.links || [];
     return '<div class="card"><h3>ข้อมูลของฉัน</h3><div class="kv"><span>ชื่อ</span><span>' + esc(m.name) + '</span></div><div class="kv"><span>เบอร์โทร</span><span>***-***-' + esc(String(m.phone).slice(-4)) + '</span></div>' +
-      '<div class="kv"><span>สาขาประจำ</span><span>' + esc(branchName(m.homeBranch)) + '</span></div><div class="kv"><span>เลขที่สมาชิก</span><span>' + esc(m.id) + '</span></div></div>' +
+      '<div class="kv"><span>สาขาที่สมัคร</span><span>' + esc(branchName(m.homeBranch)) + '</span></div><div class="kv"><span>เลขที่สมาชิก</span><span>' + esc(m.id) + '</span></div></div>' +
       '<div class="card"><h3>รับข่าวสารและโปรโมชั่น</h3><small class="muted">เปิดหรือปิดได้ตลอด</small>' +
       [brand()].map((b) => { const l = links.find((x) => x.brand_id === b.id) || {};
         return '<label class="check" style="padding:10px 0;border-top:1px solid var(--line);align-items:center"><input type="checkbox" data-a="consent" data-v="' + b.id + '"' + (l.marketing_consent ? ' checked' : '') + ' style="accent-color:' + b.theme_color + '"><span style="flex:1"><b>' + esc(b.name) + '</b><br><small class="muted">' + (l.follow_status === 'follow' ? 'เป็นเพื่อนกับ OA แล้ว' : l.follow_status === 'blocked' ? 'บล็อก OA อยู่' : 'ยังไม่ได้เพิ่มเพื่อน OA นี้') + '</small></span></label>'; }).join('') +
@@ -206,14 +206,14 @@
     const b = brand(); const r = S.reg;
     if (!r.branchId && b.branches[0]) r.branchId = b.branches[0].id;
     return head('สมัครสมาชิก · ' + b.short_name) + '<main class="body" style="padding-bottom:24px">' +
-      '<div class="hero"><b>สมัครวันนี้ รับ ' + fmt(b.welcome_points) + ' แต้มทันที</b><span style="font-size:13px">+ คูปองส่วนลดสำหรับสมาชิกใหม่</span></div>' +
+      '<div class="hero"><b>' + (b.welcome_points > 0 ? 'สมัครวันนี้ รับ ' + fmt(b.welcome_points) + ' แต้มทันที' : 'สมัครสมาชิกฟรี สะสมแต้มทุกบิล') + '</b><span style="font-size:13px">+ คูปองส่วนลดสำหรับสมาชิกใหม่</span></div>' +
       '<div class="field"><label for="r-name">ชื่อ - นามสกุล</label><input id="r-name" data-m="reg.name" value="' + esc(r.name) + '" autocomplete="name"></div>' +
       (S.cfg && S.cfg.requireOtp
         ? '<div class="row2"><div class="field"><label for="r-phone">เบอร์โทรศัพท์</label><input id="r-phone" data-m="reg.phone" inputmode="tel" maxlength="10" value="' + esc(r.phone) + '" autocomplete="tel"></div><button class="btn' + (r.otpSent ? ' ghost' : '') + '" data-a="otp">' + (r.otpSent ? 'ส่งอีกครั้ง' : 'ขอ OTP') + '</button></div>' +
           (r.otpSent ? '<span class="ok">ส่งรหัส OTP ทาง SMS แล้ว</span><div class="field"><label for="r-otp">รหัส OTP 6 หลัก</label><input id="r-otp" data-m="reg.otp" inputmode="numeric" maxlength="6" autocomplete="one-time-code" value="' + esc(r.otp) + '"></div>' : '<span class="muted" style="font-size:13px">เราจะส่งรหัสยืนยันทาง SMS · ถ้าเคยเป็นสมาชิกด้วยเบอร์นี้ ระบบจะใช้บัญชีเดิม</span>')
         : '<div class="field"><label for="r-phone">เบอร์โทรศัพท์</label><input id="r-phone" data-m="reg.phone" inputmode="tel" maxlength="10" value="' + esc(r.phone) + '" autocomplete="tel"></div>') +
       '<div class="row2"><div class="field"><label for="r-bd">วันเกิด (รับคูปองเดือนเกิด)</label><input id="r-bd" type="date" data-m="reg.birthday" value="' + esc(r.birthday) + '"></div></div>' +
-      '<div class="field"><label for="r-br">สาขาประจำ</label><select id="r-br" data-m="reg.branchId">' + b.branches.map((x) => '<option value="' + x.id + '"' + (r.branchId === x.id ? ' selected' : '') + '>' + esc(x.name) + '</option>').join('') + '</select></div>' +
+      '<div class="field"><label for="r-br">สาขาที่สมัคร</label><select id="r-br" data-m="reg.branchId">' + b.branches.map((x) => '<option value="' + x.id + '"' + (r.branchId === x.id ? ' selected' : '') + '>' + esc(x.name) + '</option>').join('') + '</select></div>' +
       '<label class="check"><input type="checkbox" data-m="reg.privacy"' + (r.privacy ? ' checked' : '') + '><span>ยอมรับเงื่อนไขสมาชิกและนโยบายความเป็นส่วนตัวของเครือ</span></label>' +
       '<label class="check"><input type="checkbox" data-m="reg.marketing"' + (r.marketing ? ' checked' : '') + '><span>ยินดีรับข่าวสารและโปรโมชั่นจาก ' + esc(b.name) + ' ทาง LINE</span></label>' +
       (r.err ? '<div class="err" role="alert">' + esc(r.err) + '</div>' : '') +
@@ -279,7 +279,7 @@
       if (r.err) return render();
       try {
         const res = await api('POST', '/api/liff/register', { brand: S.brand, name: r.name.trim(), phone: r.phone, otp: S.cfg.requireOtp ? r.otp : undefined, birthday: r.birthday || null, branchId: r.branchId, marketing: r.marketing, privacy: true });
-        toast(res.linked ? 'พบบัญชีเดิมของคุณ ผูกกับ LINE แล้ว' : 'สมัครสำเร็จ รับ ' + fmt(res.welcomePoints) + ' แต้ม');
+        toast(res.linked ? 'พบบัญชีเดิมของคุณ ผูกกับ LINE แล้ว' : (res.welcomePoints > 0 ? 'สมัครสำเร็จ รับ ' + fmt(res.welcomePoints) + ' แต้ม' : 'สมัครสำเร็จ'));
         if (S.fromKiosk) S.joined = r.phone;
         S.tab = 'home'; await refresh();
       } catch (e) { r.err = e.message; render(); }
