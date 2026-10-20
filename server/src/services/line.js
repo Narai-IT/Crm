@@ -21,6 +21,24 @@ export async function queueMessage(db, { brandId, lineUserId, kind, data, replyT
   return m.id;
 }
 
+// ลูกค้าเป็นเพื่อนกับ OA ของแบรนด์แล้วหรือยัง · true/false หรือ null = ตรวจไม่ได้ (ยังไม่ตั้ง token, LINE ล่ม)
+// ดูจาก event follow ก่อน ถ้ายังไม่มีให้ถาม LINE ตรง (โปรไฟล์ดึงได้เฉพาะคนที่เป็นเพื่อนกับ OA)
+export async function isFriend(db, brandId, lineUserId) {
+  if (!channelConfigured(brandId)) return null;
+  const f = await db.one('SELECT status FROM line_followers WHERE line_user_id = $1 AND brand_id = $2', [lineUserId, brandId]);
+  if (f && f.status === 'follow') return true;
+  try {
+    const res = await fetch('https://api.line.me/v2/bot/profile/' + encodeURIComponent(lineUserId), {
+      headers: { authorization: 'Bearer ' + env(brandId, 'TOKEN') }, signal: AbortSignal.timeout(4000) });
+    if (res.status === 404) return false;
+    if (!res.ok) return null;
+    const p = await res.json().catch(() => ({}));
+    await db.q(`INSERT INTO line_followers (line_user_id, brand_id, status, display_name, changed_at) VALUES ($1,$2,'follow',$3, now())
+                ON CONFLICT (line_user_id, brand_id) DO UPDATE SET status = 'follow', changed_at = now()`, [lineUserId, brandId, p.displayName || null]);
+    return true;
+  } catch (e) { return null; }
+}
+
 /* ---------- ตัวสร้างข้อความ LINE จริงจากข้อมูลเดียวกับที่เดโมแสดง ---------- */
 const txt = (text, extra = {}) => ({ type: 'text', text, wrap: true, ...extra });
 const row = (k, v) => ({ type: 'box', layout: 'horizontal', contents: [txt(k, { size: 'sm', color: '#6B5146', flex: 3 }), txt(v, { size: 'sm', align: 'end', weight: 'bold', flex: 4 })] });

@@ -625,3 +625,22 @@ t('หลังบ้านสมาชิก: เพิ่มสมาชิก
   // ลบแท็ก
   assert.equal((await call('DELETE', '/api/admin/tags/' + fresh.data.id, undefined, adm)).status, 200);
 });
+
+t('ต้องเพิ่มเพื่อน OA ก่อนสมัคร: ตรวจจาก LINE แล้วผ่านเมื่อ follow', async () => {
+  const U = { 'x-dev-line-user': 'Utest000000000000000000000000f01d' };
+  const realFetch = globalThis.fetch; let asked = 0;
+  globalThis.fetch = (url, opt) => String(url).startsWith('https://api.line.me/v2/bot/profile/') ? (asked++, Promise.resolve(new Response('{}', { status: 404 }))) : realFetch(url, opt);
+  process.env.LINE_HUMLAI_TOKEN = 'test-token';
+  try {
+    const me = await call('GET', '/api/liff/me?brand=humlai', undefined, U);
+    assert.equal(me.data.friend.required, true);
+    assert.match(me.data.friend.oa, /^@/);
+    const reg = await call('POST', '/api/liff/register', { brand: 'humlai', name: 'ยังไม่แอด', phone: '0877777771', privacy: true, branchId: 'HL01' }, U);
+    assert.equal(reg.status, 400); assert.equal(reg.data.error, 'friend_required');
+    assert.ok(asked >= 2);
+    await call('POST', '/api/dev/line-event', { brand: 'humlai', type: 'follow', lineUserId: U['x-dev-line-user'] });
+    assert.equal((await call('GET', '/api/liff/me?brand=humlai', undefined, U)).data.friend.required, false);
+    const ok = await call('POST', '/api/liff/register', { brand: 'humlai', name: 'แอดแล้ว', phone: '0877777771', privacy: true, branchId: 'HL01' }, U);
+    assert.equal(ok.status, 200, JSON.stringify(ok.data));
+  } finally { globalThis.fetch = realFetch; delete process.env.LINE_HUMLAI_TOKEN; }
+});

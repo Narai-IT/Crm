@@ -123,3 +123,10 @@ h1, h2, h3 { font-family: var(--f-display); font-weight: 600; margin: 0; }
 .code .cqr svg { display: block; width: 100%; height: auto; }
 .reward img.art { height: auto; aspect-ratio: 1 / 1; object-fit: cover; padding: 0; width: 100%; display: block; }
 .reward .desc { color: var(--muted); font-size: 12px; white-space: pre-line; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+
+/* ขั้นเพิ่มเพื่อน OA ก่อนสมัคร */
+.friend { display: grid; gap: 10px; text-align: center; }
+.friend-id { font-weight: 700; font-size: 18px; letter-spacing: .3px; }
+.btn.line { background: #06C755; }
+.steps { display: flex; justify-content: center; gap: 18px; font-size: 13px; color: var(--muted); }
+.steps .on { color: var(--ai); font-weight: 700; }
