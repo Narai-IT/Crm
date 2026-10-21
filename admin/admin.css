@@ -278,3 +278,4 @@ details.adv[open] > *:not(summary) { margin-bottom: 12px; }
 .rm-h > div { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; min-width: 0; }
 @media (max-width: 1000px) { .rm { grid-template-columns: 1fr; } .rm-side { position: static; } }
 @media (max-width: 640px) { .rm-act { grid-template-columns: 30px minmax(0, 1fr); } .rm-act > :last-child { grid-column: 2; } .rm-h { grid-template-columns: 80px minmax(0, 1fr); } .rm-h img { width: 80px; } .rm-h .btn { grid-column: 1 / -1; } }
+.rm-live { max-width: 720px; } .rm-live .rm-z { cursor: default; }

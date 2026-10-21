@@ -102,3 +102,43 @@ export async function install({ brandId, token, liffId, layout, actions, chatBar
   for (const m of old) await line('DELETE', 'https://api.line.me/v2/bot/richmenu/' + m.richMenuId).catch(() => {});
   return { richMenuId, removed: old.length };
 }
+
+// เมนูหลักที่ OA ใช้อยู่ตอนนี้ (ตั้งผ่าน API เท่านั้น · เมนูที่ตั้งใน OA Manager LINE ไม่ให้ดึง)
+// null = OA ไม่มีเมนูหลักที่ตั้งผ่าน API · ถ้า id ตรงกับที่รู้อยู่แล้วไม่ดึงรูปซ้ำ
+export async function fetchLive(token, knownId) {
+  const get = (url) => fetch(url, { headers: { authorization: 'Bearer ' + token }, signal: AbortSignal.timeout(8000) });
+  const d = await get('https://api.line.me/v2/bot/user/all/richmenu');
+  if (d.status === 404) return null;
+  if (!d.ok) throw new Error('LINE ' + d.status);
+  const { richMenuId } = await d.json();
+  if (!richMenuId) return null;
+  if (richMenuId === knownId) return { richMenuId };
+  const m = await get('https://api.line.me/v2/bot/richmenu/' + richMenuId);
+  if (!m.ok) throw new Error('LINE ' + m.status);
+  const menu = await m.json();
+  const img = await get('https://api-data.line.me/v2/bot/richmenu/' + richMenuId + '/content');
+  if (!img.ok) throw new Error('LINE ' + img.status);
+  const image = Buffer.from(await img.arrayBuffer());
+  return { richMenuId, menu, image, mime: (imageInfo(image) || {}).mime || img.headers.get('content-type') || 'image/jpeg' };
+}
+
+// แปลงเมนูจาก LINE กลับเป็นแบบช่อง/ปุ่มของระบบ · null = จุดกดไม่ตรงกับแบบไหน
+export function fromLine(menu, brandId) {
+  const areas = menu.areas.map((a) => [a.bounds.x, a.bounds.y, a.bounds.width, a.bounds.height]);
+  const layout = Object.keys(LAYOUTS).find((k) => {
+    const l = LAYOUTS[k];
+    return l.width === menu.size.width && l.height === menu.size.height && l.areas.length === areas.length && l.areas.every((x, i) => x.every((v, j) => Math.abs(v - areas[i][j]) <= 2));
+  });
+  if (!layout) return null;
+  const actions = menu.areas.map(({ action: a }) => {
+    if (a.type === 'message') return { kind: 'message', value: a.text };
+    const m = a.type === 'uri' && /^https:\/\/liff\.line\.me\/[^?]+\?(.*)$/.exec(a.uri || '');
+    if (m) {
+      const p = new URLSearchParams(m[1]);
+      const kind = Object.keys(ACTIONS).find((k) => ACTIONS[k].tab !== undefined && ACTIONS[k].tab === (p.get('tab') || ''));
+      if (kind && (!p.get('brand') || p.get('brand') === brandId)) return { kind };
+    }
+    return a.type === 'uri' && /^https:\/\//.test(a.uri || '') ? { kind: 'uri', value: a.uri } : { kind: 'message', value: a.text || a.label || '' };
+  });
+  return { layout, actions, chatBar: [...String(menu.chatBarText || 'เมนู')].slice(0, 14).join('') };
+}

@@ -665,7 +665,7 @@ t('ริชเมนู: ตรวจขนาดรูป ติดตั้�
     assert.equal(wrong.status, 400); assert.match(wrong.data.message, /2500 × 1686/);
     const badUri = await call('POST', '/api/admin/richmenus', { brand: 'humlai', layout: 'l4', actions: [acts[0], acts[1], acts[2], { kind: 'uri', value: 'http://x.com' }], chatBar: 'เมนู', dataUrl: png(2500, 1686) }, adm);
     assert.equal(badUri.status, 400);
-    assert.equal(calls.length, 0);
+    assert.equal(calls.filter((c) => !c.startsWith('GET ')).length, 0);
     const a = await call('POST', '/api/admin/richmenus', { brand: 'humlai', layout: 'l4', actions: acts, chatBar: 'เมนูร้าน', dataUrl: png(2500, 1686) }, adm);
     assert.equal(a.status, 200, JSON.stringify(a.data)); assert.equal(a.data.is_active, true);
     assert.ok(calls.includes('DELETE /richmenu/old-1') && !calls.includes('DELETE /richmenu/other'));
@@ -683,4 +683,42 @@ t('ริชเมนู: ตรวจขนาดรูป ติดตั้�
     assert.equal(img.status, 200); assert.equal(img.headers.get('content-type'), 'image/png');
     assert.equal((await call('GET', '/api/admin/richmenus?brand=humlai', undefined, { 'x-dev-staff': 'S005' })).status, 403);
   } finally { globalThis.fetch = realFetch; delete process.env.LINE_HUMLAI_TOKEN; delete process.env.LIFF_ID; }
+});
+
+t('ริชเมนู: ดึงเมนูที่ใช้อยู่ใน LINE มาแสดง (ตรงแบบ = เก็บเป็นเมนูปัจจุบัน · ไม่ตรง = แสดงอย่างเดียว)', async () => {
+  const adm = { 'x-dev-staff': 'S002' };
+  const pngBuf = (w, h) => { const b = Buffer.alloc(64); Buffer.from('89504e470d0a1a0a0000000d49484452', 'hex').copy(b); b.writeUInt32BE(w, 16); b.writeUInt32BE(h, 20); return b; };
+  const l4 = { size: { width: 2500, height: 1686 }, chatBarText: 'เมนูหลัก', areas: [
+    { bounds: { x: 0, y: 0, width: 1250, height: 1686 }, action: { type: 'uri', uri: 'https://liff.line.me/abc?brand=narai' } },
+    { bounds: { x: 1250, y: 0, width: 1250, height: 843 }, action: { type: 'message', text: 'โปรโมชั่น' } },
+    { bounds: { x: 1250, y: 843, width: 625, height: 843 }, action: { type: 'uri', uri: 'https://liff.line.me/abc?brand=narai&tab=coupons' } },
+    { bounds: { x: 1875, y: 843, width: 625, height: 843 }, action: { type: 'uri', uri: 'https://example.com/x' } }] };
+  const one = { size: { width: 2500, height: 843 }, chatBarText: 'เมนู', areas: [{ bounds: { x: 0, y: 0, width: 2500, height: 843 }, action: { type: 'message', label: 'ทั้งหมด', text: 'ทั้งหมด' } }] };
+  let live = 'live-1'; const menus = { 'live-1': l4, 'live-2': one }; let contentCalls = 0;
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (url, opt) => {
+    const u = String(url);
+    if (!u.includes('line.me/v2/bot')) return realFetch(url, opt);
+    if (u.endsWith('/user/all/richmenu')) return Promise.resolve(live ? new Response(JSON.stringify({ richMenuId: live })) : new Response('{}', { status: 404 }));
+    const c = /\/richmenu\/([^/]+)\/content$/.exec(u);
+    if (c) { contentCalls++; const m = menus[c[1]]; return Promise.resolve(new Response(pngBuf(m.size.width, m.size.height), { headers: { 'content-type': 'image/png' } })); }
+    const m = /\/richmenu\/([^/]+)$/.exec(u);
+    return Promise.resolve(new Response(JSON.stringify(menus[m[1]] || {})));
+  };
+  process.env.LINE_NARAI_TOKEN = 'test-token'; process.env.LIFF_ID = 'test-liff';
+  try {
+    let r = (await call('GET', '/api/admin/richmenus?brand=narai', undefined, adm)).data;
+    assert.equal(r.live, 'synced');
+    assert.equal(r.list.length, 1); assert.equal(r.list[0].is_active, true); assert.equal(r.list[0].created_by, 'LINE');
+    assert.equal(r.list[0].layout, 'l4'); assert.equal(r.list[0].chat_bar, 'เมนูหลัก');
+    assert.deepEqual(r.list[0].actions, [{ kind: 'card' }, { kind: 'message', value: 'โปรโมชั่น' }, { kind: 'coupons' }, { kind: 'uri', value: 'https://example.com/x' }]);
+    r = (await call('GET', '/api/admin/richmenus?brand=narai', undefined, adm)).data;    // id เดิม ไม่ดึงซ้ำ
+    assert.equal(r.list.length, 1); assert.equal(contentCalls, 1);
+    live = 'live-2';
+    r = (await call('GET', '/api/admin/richmenus?brand=narai', undefined, adm)).data;
+    assert.equal(r.live, 'other'); assert.equal(r.liveView.areas.length, 1); assert.match(r.liveView.image, /^data:image\/png;base64,/);
+    live = null;
+    r = (await call('GET', '/api/admin/richmenus?brand=narai', undefined, adm)).data;
+    assert.equal(r.live, 'none'); assert.equal(r.liveView, null);
+  } finally { globalThis.fetch = realFetch; delete process.env.LINE_NARAI_TOKEN; delete process.env.LIFF_ID; }
 });

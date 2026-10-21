@@ -374,8 +374,13 @@
     const d = S.data.rm; const r = S.rm; const lay = rmLay(); const img = rmImgUrl(); const from = rmFrom();
     const ready = d.configured && img && !r.err;
     return '<div class="note">' + (d.oa ? 'OA <b>' + esc(d.oa) + '</b> · ' : '') + (d.list.find((x) => x.is_active)
-      ? (() => { const c = d.list.find((x) => x.is_active); return 'เมนูที่ใช้อยู่: ' + esc(d.layouts[c.layout] ? d.layouts[c.layout].name : c.layout) + ' · ติดตั้งเมื่อ ' + date(c.installed_at) + ' ' + new Date(c.installed_at).toTimeString().slice(0, 5) + (c.created_by ? ' โดย ' + esc(c.created_by) : ''); })()
-      : 'ยังไม่เคยติดตั้งเมนูจากหน้านี้ (ถ้ามีเมนูที่ตั้งใน OA Manager เมนูที่ติดตั้งจากหน้านี้จะแสดงแทน)') + '</div>' +
+      ? (() => { const c = d.list.find((x) => x.is_active); return 'เมนูที่ใช้อยู่: ' + esc(d.layouts[c.layout] ? d.layouts[c.layout].name : c.layout) + (c.created_by === 'LINE' ? ' · ดึงมาจาก LINE เมื่อ ' : ' · ติดตั้งเมื่อ ') + date(c.installed_at) + ' ' + new Date(c.installed_at).toTimeString().slice(0, 5) + (c.created_by && c.created_by !== 'LINE' ? ' โดย ' + esc(c.created_by) : ''); })()
+      : ({ none: 'OA นี้ยังไม่มีเมนูที่ติดตั้งผ่านระบบ · ถ้าตั้งเมนูไว้ใน OA Manager ระบบดึงรูปมาแสดงไม่ได้ (LINE ไม่เปิดให้ดึง) ให้อัปโหลดรูปเดิมแล้วกดติดตั้ง เพื่อจัดการจากหน้านี้ต่อ',
+        other: 'เมนูที่ใช้อยู่ใน LINE ตอนนี้มีจุดกดไม่ตรงกับแบบในหน้านี้ แสดงให้ดูด้านล่าง · ติดตั้งเมนูใหม่จากหน้านี้เพื่อจัดการต่อ',
+        unknown: 'ดึงข้อมูลเมนูจาก LINE ไม่สำเร็จ ลองโหลดหน้าใหม่อีกครั้ง' }[d.live] || 'ยังไม่เคยติดตั้งเมนูจากหน้านี้')) + '</div>' +
+      (d.liveView ? '<div class="card"><div class="hd"><h2>เมนูที่ใช้อยู่ใน LINE ตอนนี้</h2><small class="muted">' + d.liveView.width + ' × ' + d.liveView.height + ' · ' + d.liveView.areas.length + ' ช่อง</small></div>' +
+        '<div class="rm-pv rm-live" style="aspect-ratio:' + d.liveView.width + '/' + d.liveView.height + '"><img src="' + esc(d.liveView.image) + '" alt="">' +
+        d.liveView.areas.map((a, i) => '<span class="rm-z" style="left:' + (a.bounds[0] / d.liveView.width * 100) + '%;top:' + (a.bounds[1] / d.liveView.height * 100) + '%;width:' + (a.bounds[2] / d.liveView.width * 100) + '%;height:' + (a.bounds[3] / d.liveView.height * 100) + '%"><b>' + ZL(i) + '</b><em>' + esc(String(a.label).slice(0, 40)) + '</em></span>').join('') + '</div></div>' : '') +
       (d.configured ? '' : '<div class="err" role="alert">ยังติดตั้งไม่ได้: ต้องตั้ง LINE_' + esc(S.brand.toUpperCase()) + '_TOKEN และ LIFF_ID ในไฟล์ .env ของ server ก่อน</div>') +
       '<div class="rm"><div class="rm-col">' +
       '<div class="card"><div class="rm-step"><i>1</i><h2>เลือกแบบช่อง</h2><small class="muted">รูปต้องมีขนาดตามแบบที่เลือก</small></div><div class="rm-lays">' +

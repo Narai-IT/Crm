@@ -866,8 +866,36 @@ export default function (r) {
     const brandId = url.searchParams.get('brand'); requireBrand(s, brandId);
     const b = await one('SELECT oa_basic_id FROM brands WHERE id = $1', [brandId]);
     if (!b) throw notFound('ไม่พบแบรนด์');
+    // ดูเมนูที่ OA ใช้อยู่จริงใน LINE: ถ้าเป็นเมนูที่ระบบยังไม่รู้จัก (เช่นติดตั้งจากสคริปต์) ดึงมาเก็บเป็นเมนูปัจจุบัน
+    // จุดกดไม่ตรงกับแบบของระบบ → แสดงรูปให้ดูอย่างเดียว · live = 'none' ไม่มีเมนูจาก API (อาจเป็นเมนูที่ตั้งใน OA Manager ซึ่ง LINE ไม่ให้ดึง)
+    const token = process.env['LINE_' + brandId.toUpperCase() + '_TOKEN'];
+    let live = token ? 'unknown' : 'no_token'; let liveView = null;
+    if (token) {
+      const act = await one('SELECT line_menu_id FROM rich_menus WHERE brand_id = $1 AND is_active', [brandId]);
+      try {
+        const lv = await rm.fetchLive(token, act && act.line_menu_id);
+        if (!lv) live = 'none';
+        else if (!lv.menu) live = 'synced';
+        else {
+          const m = rm.fromLine(lv.menu, brandId); const info = rm.imageInfo(lv.image);
+          if (m && info) {
+            await tx(async (db) => {
+              await db.q('UPDATE rich_menus SET is_active = false, line_menu_id = null WHERE brand_id = $1 AND is_active', [brandId]);
+              const row = await db.one(`INSERT INTO rich_menus (brand_id, layout, actions, chat_bar, mime, width, height, data, line_menu_id, is_active, created_by)
+                VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,true,'LINE') RETURNING id`, [brandId, m.layout, JSON.stringify(m.actions), m.chatBar, info.mime, info.width, info.height, lv.image, lv.richMenuId]);
+              await core.audit(db, actor(s), 'import_richmenu', { type: 'brand', id: brandId }, 'ดึงริชเมนูที่ใช้อยู่ใน LINE มาเก็บ (#' + row.id + ')', null, { id: row.id, layout: m.layout });
+            });
+            live = 'synced';
+          } else {
+            live = 'other';
+            liveView = { image: 'data:' + lv.mime + ';base64,' + lv.image.toString('base64'), width: lv.menu.size.width, height: lv.menu.size.height,
+              areas: lv.menu.areas.map((a) => ({ bounds: [a.bounds.x, a.bounds.y, a.bounds.width, a.bounds.height], label: a.action.label || a.action.text || a.action.uri || a.action.type })) };
+          }
+        }
+      } catch (e) { live = 'unknown'; }
+    }
     const list = await q('SELECT ' + RM_COLS + ' FROM rich_menus WHERE brand_id = $1 ORDER BY is_active DESC, installed_at DESC LIMIT 20', [brandId]);
-    return { oa: b.oa_basic_id, configured: !!process.env['LINE_' + brandId.toUpperCase() + '_TOKEN'] && !!process.env.LIFF_ID,
+    return { oa: b.oa_basic_id, configured: !!token && !!process.env.LIFF_ID, live, liveView,
       layouts: rm.LAYOUTS, actions: rm.ACTIONS, defaults: rm.DEFAULT_ACTIONS, list: list.map((x) => ({ ...x, image: '/api/public/richmenu-images/' + x.id })) };
   });
   // ติดตั้งเมนูใหม่: รูปใหม่ (dataUrl) หรือใช้รูปของเมนูเดิม (fromId) แล้วเปลี่ยนแค่ปุ่ม
