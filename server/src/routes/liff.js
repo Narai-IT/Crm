@@ -4,6 +4,7 @@ import { bad, notFound } from '../http.js';
 import { liffUser } from '../auth.js';
 import { isPhone, qrToken, memberPin } from '../util.js';
 import * as core from '../services/core.js';
+import { isFriend } from '../services/line.js';
 
 async function me(req) {
   const u = await liffUser(req);
@@ -24,10 +25,18 @@ export function couponView(c) {
 }
 export const COUPON_SQL = 'SELECT c.*, t.title, t.badge_big, t.badge_small, t.condition_text, t.discount_type, t.discount_value, t.min_spend, t.max_discount, t.description, t.image_id, t.valid_from, t.use_days FROM member_coupons c JOIN coupon_templates t ON t.id = c.template_id';
 
+// ต้องเพิ่มเพื่อน OA ก่อนสมัครไหม · ok = null คือตรวจไม่ได้ ปล่อยให้สมัครได้
+async function friendGate(brandId, lineUserId) {
+  const b = brandId && await one('SELECT oa_basic_id, require_follow FROM brands WHERE id = $1', [brandId]);
+  if (!b || !b.require_follow || !b.oa_basic_id) return { required: false, ok: true };
+  const ok = await isFriend({ q, one }, brandId, lineUserId);
+  return { required: ok === false, ok: ok !== false, oa: b.oa_basic_id };
+}
+
 export default function (r) {
-  r.get('/api/liff/me', async (req) => {
+  r.get('/api/liff/me', async (req, _b, url) => {
     const { u, m } = await me(req);
-    if (!m) return { member: null, lineUserId: u.userId, displayName: u.displayName };
+    if (!m) return { member: null, lineUserId: u.userId, displayName: u.displayName, friend: await friendGate(url.searchParams.get('brand'), u.userId) };
     const links = await q('SELECT brand_id, follow_status, marketing_consent FROM member_brand_links WHERE member_id = $1', [m.id]);
     return { member: { id: m.id, name: m.full_name, phone: m.phone, birthday: m.birth_date, homeBranch: m.home_branch_id, joinedBrand: m.joined_brand_id, joinedAt: m.created_at },
       wallets: await core.walletsOf({ q, one }, m.id), links };
@@ -52,6 +61,8 @@ export default function (r) {
     if (!String(body.name || '').trim()) throw bad('name_required', 'กรอกชื่อ - นามสกุล');
     if (!isPhone(body.phone)) throw bad('phone_invalid', 'กรอกเบอร์โทร 10 หลักที่ขึ้นต้นด้วย 0');
     if (!body.privacy) throw bad('privacy_required', 'ต้องยอมรับเงื่อนไขสมาชิกและนโยบายความเป็นส่วนตัว');
+    const gate = await friendGate(body.brand, u.userId);
+    if (!gate.ok) throw bad('friend_required', 'กรุณาเพิ่มเพื่อน LINE ' + gate.oa + ' ก่อนสมัครสมาชิก');
     if (body.otp) {
       const ok = await tx((db) => core.verifyOtp(db, body.phone, String(body.otp), u.userId));
       if (!ok) throw bad('otp_invalid', 'รหัส OTP ไม่ถูกต้องหรือหมดอายุ');

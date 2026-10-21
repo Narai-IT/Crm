@@ -403,7 +403,9 @@
       sec('LINE', 'ข้อความแจ้งแต้มนับโควต้าข้อความของ LINE OA · ข้อความตอบรีวิวไม่นับ',
         fld('r-notify', 'แจ้งแต้มหลังชำระบิล', '<select id="r-notify" name="pointsNotify">' + opt([['off', 'ไม่แจ้ง'], ['all', 'แจ้งทุกบิล'], ['min', 'แจ้งเมื่อยอดบิลถึง…']], r.points_notify || 'off') + '</select>', 'ลูกค้าดูแต้มในบัตรสมาชิกได้ตลอด') +
         fld('r-nmin', 'ยอดบิลขั้นต่ำที่แจ้ง (บาท)', '<input id="r-nmin" name="pointsNotifyMin" type="number" min="0" value="' + (Number(r.points_notify_min) || '') + '">', 'ใช้เมื่อเลือก "แจ้งเมื่อยอดบิลถึง…"') +
-        fld('r-review', 'แต้มรีวิวร้านในแชท', num('r-review', 'reviewPoints', r.review_points == null ? 5 : r.review_points, ' min="0" max="1000" step="1"'), 'ลูกค้าพิมพ์ "ติชม" แล้วเลือกคะแนน · เฉพาะวันที่มีบิล วันละครั้ง · 0 = ปิด')) +
+        fld('r-review', 'แต้มรีวิวร้านในแชท', num('r-review', 'reviewPoints', r.review_points == null ? 5 : r.review_points, ' min="0" max="1000" step="1"'), 'ลูกค้าพิมพ์ "ติชม" แล้วเลือกคะแนน · เฉพาะวันที่มีบิล วันละครั้ง · 0 = ปิด') +
+        fld('r-oa', 'LINE OA ID ของแบรนด์', '<input id="r-oa" name="oaBasicId" placeholder="@xxxx" value="' + esc(r.oa_basic_id || '') + '">', 'ใช้ทำปุ่มเพิ่มเพื่อนในหน้าสมัคร') +
+        fld('r-follow', 'สมัครสมาชิก', '<select id="r-follow" name="requireFollow">' + opt([['1', 'ต้องเพิ่มเพื่อน OA ก่อน'], ['0', 'ไม่บังคับ']], r.require_follow === false ? '0' : '1') + '</select>', 'ต้องใส่ LINE OA ID และตั้ง token ของ OA แล้วจึงมีผล')) +
       (S.err ? '<div class="err" role="alert">' + esc(S.err) + '</div>' : '') +
       '<div class="actions rules-foot"><button class="btn">บันทึกกฎแต้ม</button><small class="muted">มีผลกับบิลหลังบันทึก บิลเก่าคิดตามกฎเดิม · กฎนี้ใช้อยู่ตั้งแต่ ' + date(r.effective_from) + '</small></div></form>';
   }
@@ -756,6 +758,7 @@
         tiers: { gold: Number(o.gold), platinum: Number(o.platinum) }, promo: { on: o.promoOn, day: Number(o.promoDay), mult: Number(o.promoMult) } });
       await api('PATCH', '/api/admin/brands/' + S.brand + '/notify', { pointsNotify: o.pointsNotify, pointsNotifyMin: o.pointsNotifyMin });
       await api('PATCH', '/api/admin/brands/' + S.brand + '/review', { reviewPoints: Number(o.reviewPoints) });
+      await api('PATCH', '/api/admin/brands/' + S.brand + '/join', { oaBasicId: o.oaBasicId, requireFollow: o.requireFollow === '1' });
       S.err = ''; toast('บันทึกกฎแต้มแล้ว'); await load();
     },
     password: async (o) => {

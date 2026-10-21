@@ -440,7 +440,7 @@ export default function (r) {
 
   r.get('/api/admin/earn-rules', async (req) => {
     const s = await staffUser(req); requirePage(s, 'rules');
-    return q(`SELECT e.*, b.points_notify, b.points_notify_min, b.review_points FROM earn_rules e JOIN brands b ON b.id = e.brand_id
+    return q(`SELECT e.*, b.points_notify, b.points_notify_min, b.review_points, b.oa_basic_id, b.require_follow FROM earn_rules e JOIN brands b ON b.id = e.brand_id
       WHERE e.effective_to IS NULL AND e.brand_id = ANY($1) ORDER BY e.brand_id`, [s.brands]);
   });
   // แก้กฎ = ปิดกฎเดิม (effective_to) แล้วเพิ่มกฎใหม่ · ย้อนดูได้ว่าบิลไหนใช้กฎไหน
@@ -472,6 +472,21 @@ export default function (r) {
   });
 
   // แต้มรีวิวร้านในแชท LINE (ให้เฉพาะคนที่มีบิลวันนั้น) · 0 = ปิด
+  r.patch('/api/admin/brands/:id/join', async (req, b, _u, p) => {
+    const s = await staffUser(req); requirePage(s, 'rules'); requireBrand(s, p.id);
+    let oa = String(b.oaBasicId || '').trim();
+    if (oa && !oa.startsWith('@')) oa = '@' + oa;
+    if (oa && !/^@[0-9a-z._-]{3,40}$/i.test(oa)) throw bad('oa_invalid', 'LINE OA ID ต้องเป็นรูปแบบ @xxxx');
+    const req2 = !!b.requireFollow;
+    return tx(async (db) => {
+      const old = await db.one('SELECT oa_basic_id, require_follow FROM brands WHERE id = $1', [p.id]);
+      if (!old) throw notFound('ไม่พบแบรนด์');
+      if ((old.oa_basic_id || '') === oa && old.require_follow === req2) return old;
+      const out = await db.one('UPDATE brands SET oa_basic_id = $2, require_follow = $3 WHERE id = $1 RETURNING oa_basic_id, require_follow', [p.id, oa || null, req2]);
+      await core.audit(db, actor(s), 'update_join_rule', { type: 'brand', id: p.id }, 'สมัครสมาชิก: ' + (req2 ? 'ต้องเพิ่มเพื่อน ' + (oa || '(ยังไม่ใส่ OA)') : 'ไม่บังคับเพิ่มเพื่อน'), old, out);
+      return out;
+    });
+  });
   r.patch('/api/admin/brands/:id/review', async (req, b, _u, p) => {
     const s = await staffUser(req); requirePage(s, 'rules'); requireBrand(s, p.id);
     const pts = Number(b.reviewPoints);
