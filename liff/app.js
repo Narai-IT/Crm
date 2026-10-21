@@ -35,7 +35,7 @@
   async function api(method, path, body, headers) {
     const res = await fetch(path, { method, headers: Object.assign({ 'content-type': 'application/json' }, S.auth, headers || {}), body: body === undefined ? undefined : JSON.stringify(body) });
     let data = null; try { data = await res.json(); } catch (e) { data = null; }
-    if (!res.ok) { const err = new Error((data && data.message) || 'เชื่อมต่อระบบไม่สำเร็จ'); err.status = res.status; throw err; }
+    if (!res.ok) { const err = new Error((data && data.message) || 'เชื่อมต่อระบบไม่สำเร็จ'); err.status = res.status; err.code = data && data.error; throw err; }
     return data;
   }
   function loadScript(src) {
@@ -92,8 +92,13 @@
         return fatal('ยังไม่ได้ตั้งค่า LIFF', 'ผู้ดูแลต้องใส่ LIFF_ID ในไฟล์ .env ของ server');
       }
       await loadMe();
+      if (!S.me.member) {
+        let pend = null; try { pend = JSON.parse(sessionStorage.getItem(PENDING) || 'null'); } catch (e) { /* ignore */ }
+        if (pend && pend.brand === S.brand) Object.assign(S.reg, pend.reg);
+      }
       await loadTab();
       render();
+      if (S.reg.wait) await resumeAfterFriend();
     } catch (e) {
       if (e.status === 401) return fatal('การเข้าสู่ระบบหมดอายุ', 'ปิดหน้านี้แล้วกดเมนู "สมาชิก" ใน LINE อีกครั้ง', true);
       fatal('เปิดบัตรสมาชิกไม่สำเร็จ', e.message, true);
@@ -211,18 +216,8 @@
         return '<label class="check" style="padding:10px 0;border-top:1px solid var(--line);align-items:center"><input type="checkbox" data-a="consent" data-v="' + b.id + '"' + (l.marketing_consent ? ' checked' : '') + ' style="accent-color:' + b.theme_color + '"><span style="flex:1"><b>' + esc(b.name) + '</b><br><small class="muted">' + (l.follow_status === 'follow' ? 'เป็นเพื่อนกับ OA แล้ว' : l.follow_status === 'blocked' ? 'บล็อก OA อยู่' : 'ยังไม่ได้เพิ่มเพื่อน OA นี้') + '</small></span></label>'; }).join('') +
       '</div><button class="btn ghost" data-a="tab" data-v="home">กลับไปที่บัตร</button>';
   }
-  function friendView(b, f) {
-    return head('สมัครสมาชิก · ' + b.short_name) + '<main class="body" style="padding-bottom:24px">' +
-      '<div class="hero"><b>ขั้นที่ 1 · เพิ่มเพื่อน LINE ' + esc(b.name) + '</b><span style="font-size:13px">เพื่อรับแต้ม คูปอง และแจ้งเตือนสมาชิกทาง LINE</span></div>' +
-      '<div class="card friend"><div class="friend-id">' + esc(f.oa) + '</div>' +
-      '<button class="btn line" data-a="addFriend">เพิ่มเพื่อน LINE</button>' +
-      '<small class="muted">เพิ่มเพื่อนแล้วกลับมาหน้านี้ ระบบจะไปขั้นกรอกข้อมูลให้เอง</small>' +
-      '<button class="btn ghost" data-a="checkFriend">เพิ่มเพื่อนแล้ว ไปต่อ</button></div>' +
-      '<div class="steps"><span class="on">1 เพิ่มเพื่อน</span><span>2 กรอกข้อมูล</span></div></main>';
-  }
   function registerView() {
     const b = brand(); const r = S.reg;
-    if (S.me.friend && S.me.friend.required) return friendView(b, S.me.friend);
     if (!r.branchId && b.branches[0]) r.branchId = b.branches[0].id;
     return head('สมัครสมาชิก · ' + b.short_name) + '<main class="body" style="padding-bottom:24px">' +
       '<div class="hero"><b>' + (b.welcome_points > 0 ? 'สมัครวันนี้ รับ ' + fmt(b.welcome_points) + ' แต้มทันที' : 'สมัครสมาชิกฟรี สะสมแต้มทุกบิล') + '</b><span style="font-size:13px">+ คูปองส่วนลดสำหรับสมาชิกใหม่</span></div>' +
@@ -236,7 +231,8 @@
       '<label class="check"><input type="checkbox" data-m="reg.privacy"' + (r.privacy ? ' checked' : '') + '><span>ยอมรับเงื่อนไขสมาชิกและนโยบายความเป็นส่วนตัวของเครือ</span></label>' +
       '<label class="check"><input type="checkbox" data-m="reg.marketing"' + (r.marketing ? ' checked' : '') + '><span>ยินดีรับข่าวสารและโปรโมชั่นจาก ' + esc(b.name) + ' ทาง LINE</span></label>' +
       (r.err ? '<div class="err" role="alert">' + esc(r.err) + '</div>' : '') +
-      '<button class="btn" data-a="register">สมัครสมาชิก</button></main>';
+      '<button class="btn" data-a="register">สมัครสมาชิก</button>' +
+      (S.me.friend && S.me.friend.required ? '<small class="muted" style="text-align:center">กดสมัครแล้ว LINE จะให้เพิ่มเพื่อน ' + esc(S.me.friend.oa) + ' ก่อน · เพิ่มแล้วระบบสมัครให้ต่ออัตโนมัติ</small>' : '') + '</main>';
   }
 
   function render() {
@@ -282,15 +278,6 @@
     bill: (v) => { S.openBill = S.openBill === v ? null : v; render(); },
     tax: async (v) => { await api('POST', '/api/liff/tax-invoice-requests', { posBillId: v }); toast('ส่งคำขอใบกำกับภาษีแล้ว พนักงานจะติดต่อกลับ'); },
     consent: async (v, el) => { await api('PATCH', '/api/liff/consents', { brand: v, marketing: el.checked }); toast(el.checked ? 'เปิดรับข่าวสารแล้ว' : 'ปิดรับข่าวสารแล้ว'); await loadMe(); render(); },
-    addFriend: () => {
-      const url = 'https://line.me/R/ti/p/' + encodeURIComponent(S.me.friend.oa);
-      if (S.inClient && window.liff) window.liff.openWindow({ url, external: false }); else window.open(url, '_blank');
-    },
-    checkFriend: async () => {
-      await loadMe();
-      if (S.me.friend && S.me.friend.required) toast('ยังไม่พบการเพิ่มเพื่อน ลองกดเพิ่มเพื่อนอีกครั้ง');
-      render();
-    },
     otp: async () => {
       const r = S.reg; r.err = '';
       if (!/^0\d{8,9}$/.test(r.phone)) { r.err = 'กรอกเบอร์โทร 10 หลักที่ขึ้นต้นด้วย 0'; return render(); }
@@ -306,19 +293,40 @@
       else if (S.cfg.requireOtp && (!r.otpSent || r.otp.length < 4)) r.err = 'กดขอ OTP แล้วกรอกรหัสที่ได้รับ';
       else if (!r.privacy) r.err = 'ต้องยอมรับเงื่อนไขสมาชิกและนโยบายความเป็นส่วนตัวก่อนสมัคร';
       if (r.err) return render();
+      if (S.me.friend && S.me.friend.required) return goAddFriend();
       try {
         const res = await api('POST', '/api/liff/register', { brand: S.brand, name: r.name.trim(), phone: r.phone, otp: S.cfg.requireOtp ? r.otp : undefined, birthday: r.birthday || null, branchId: r.branchId, marketing: r.marketing, privacy: true });
         toast(res.linked ? 'พบบัญชีเดิมของคุณ ผูกกับ LINE แล้ว' : (res.welcomePoints > 0 ? 'สมัครสำเร็จ รับ ' + fmt(res.welcomePoints) + ' แต้ม' : 'สมัครสำเร็จ'));
         if (S.fromKiosk) S.joined = r.phone;
         S.tab = 'home'; await refresh();
-      } catch (e) { r.err = e.message; render(); }
+        try { sessionStorage.removeItem(PENDING); } catch (e) { /* ignore */ }
+      } catch (e) {
+        if (e.code === 'friend_required') { await loadMe(); if (S.me.friend && S.me.friend.required) return goAddFriend(); }
+        r.err = e.message; render();
+      }
     }
   };
 
-  // กลับมาจากหน้าเพิ่มเพื่อน → ตรวจซ้ำเอง ไม่ต้องกดปุ่ม
-  document.addEventListener('visibilitychange', async () => {
-    if (document.visibilityState !== 'visible' || !S.me || S.me.member || !(S.me.friend && S.me.friend.required)) return;
-    try { await loadMe(); render(); } catch (e) { /* ignore */ }
+  // ยังไม่เป็นเพื่อนกับ OA: จำข้อมูลที่กรอกไว้ แล้วเด้งไปหน้าเพิ่มเพื่อนของ LINE · กลับมาแล้วสมัครต่อให้เอง
+  const PENDING = 'crm-liff-pending-reg';
+  function goAddFriend() {
+    S.reg.wait = true;
+    try { sessionStorage.setItem(PENDING, JSON.stringify({ brand: S.brand, reg: S.reg })); } catch (e) { /* ignore */ }
+    const url = 'https://line.me/R/ti/p/' + encodeURIComponent(S.me.friend.oa);
+    if (S.inClient && window.liff) window.liff.openWindow({ url, external: false }); else window.open(url, '_blank');
+    render();
+  }
+  async function resumeAfterFriend() {
+    if (!S.me || S.me.member || !S.reg.wait) return;
+    await loadMe();
+    if (S.me.member) { S.reg.wait = false; return refresh(); }
+    if (S.me.friend && S.me.friend.required) { S.reg.wait = false; try { sessionStorage.removeItem(PENDING); } catch (e) { /* ignore */ } S.reg.err = 'ยังไม่ได้เพิ่มเพื่อน ' + S.me.friend.oa + ' · กดสมัครสมาชิกอีกครั้ง'; return render(); }
+    S.reg.wait = false; S.busy = true;
+    try { await A.register(); } finally { S.busy = false; }
+  }
+
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible' && !S.busy) resumeAfterFriend().catch(() => { /* ignore */ });
   });
 
   document.addEventListener('click', async (e) => {
