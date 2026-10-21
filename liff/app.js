@@ -214,6 +214,11 @@
   }
   // ขั้นที่ 1 ก่อนกรอกข้อมูล: เพิ่มเพื่อน OA ของแบรนด์ (เปิดหน้านี้ครั้งแรกระบบพาไปหน้าเพิ่มเพื่อนให้เอง)
   function friendView(b, f) {
+    if (S.jumping) {
+      return head('สมัครสมาชิก · ' + b.short_name) + '<main class="body" style="padding-bottom:24px"><div class="card friend"><div class="spinner" style="margin:4px auto" aria-hidden="true"></div>' +
+        '<b>กำลังเปิด LINE ให้เพิ่มเพื่อน ' + esc(f.oa) + '</b><small class="muted">เพิ่มเพื่อนแล้วกลับมาที่หน้านี้ ระบบจะเปิดหน้ากรอกข้อมูลสมัครให้เอง</small>' +
+        '<button class="btn line" data-a="addFriend">ถ้าไม่เปิดเอง กดที่นี่</button></div></main>';
+    }
     return head('สมัครสมาชิก · ' + b.short_name) + '<main class="body" style="padding-bottom:24px">' +
       '<div class="hero"><b>ขั้นที่ 1 · เพิ่มเพื่อน LINE ' + esc(b.name) + '</b><span style="font-size:13px">เพื่อรับแต้ม คูปอง และแจ้งเตือนสมาชิกทาง LINE</span></div>' +
       '<div class="card friend"><div class="friend-id">' + esc(f.oa) + '</div>' +
@@ -322,17 +327,23 @@
     const url = 'https://line.me/R/ti/p/' + encodeURIComponent(S.me.friend.oa);
     if (S.inClient && window.liff) window.liff.openWindow({ url, external: false }); else window.open(url, '_blank');
   }
-  // ยังไม่เป็นเพื่อน: เปิดหน้าเพิ่มเพื่อนของ LINE ให้เลยครั้งแรก (ครั้งเดียวต่อแบรนด์ต่อการเปิด กันเด้งวน) · ถ้ากลับมาโดยไม่เพิ่ม ยังมีปุ่มให้กด
+  // เปิดหน้าสมัครแล้วยังไม่เป็นเพื่อน: พาไปหน้าเพิ่มเพื่อนของ LINE ทันทีทุกครั้งที่เปิด
+  // นอกแอป LINE (เปิดในเบราว์เซอร์) ทำครั้งเดียวต่อการเปิด เพราะกดย้อนกลับแล้วหน้าโหลดใหม่ จะเด้งวน
   function autoAddFriend() {
-    if (!S.me || S.me.member || !(S.me.friend && S.me.friend.required) || !S.inClient) return;
-    const k = 'crm-liff-friend-auto-' + S.brand;
-    try { if (sessionStorage.getItem(k)) return; sessionStorage.setItem(k, '1'); } catch (e) { return; }
-    openAddFriend();
+    if (!S.me || S.me.member || !(S.me.friend && S.me.friend.required)) return;
+    if (!S.inClient) {
+      const k = 'crm-liff-friend-auto-' + S.brand;
+      try { if (sessionStorage.getItem(k)) return; sessionStorage.setItem(k, '1'); } catch (e) { return; }
+    }
+    S.jumping = true; render();
+    if (S.inClient && window.liff) window.liff.openWindow({ url: 'https://line.me/R/ti/p/' + encodeURIComponent(S.me.friend.oa), external: false });
+    else location.href = 'https://line.me/R/ti/p/' + encodeURIComponent(S.me.friend.oa);
   }
-  // กลับมาจากหน้าเพิ่มเพื่อน → ตรวจซ้ำเอง ถ้าเพิ่มแล้วไปหน้ากรอกข้อมูลทันที
+  // กลับมาจากหน้าเพิ่มเพื่อน → ตรวจซ้ำ: เพิ่มแล้วไปหน้ากรอกข้อมูลทันที · ยังไม่เพิ่มแสดงหน้าที่มีปุ่มเพิ่มเพื่อน (ไม่เด้งวน)
   document.addEventListener('visibilitychange', async () => {
     if (document.visibilityState !== 'visible' || S.busy || !S.me || S.me.member || !(S.me.friend && S.me.friend.required)) return;
-    try { await loadMe(); render(); } catch (e) { /* ignore */ }
+    try { await loadMe(); } catch (e) { /* ignore */ }
+    S.jumping = false; render();
   });
 
   document.addEventListener('click', async (e) => {
