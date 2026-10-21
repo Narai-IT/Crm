@@ -555,7 +555,7 @@ t('ของรางวัล: แบบคูปอง · จำกัดร�
   assert.match((await list()).find((r) => r.id === gold.data.id).why, /Gold/);
   assert.equal((await redeem(gold.data.id, 'rw-gold-1')).status, 400);
   // เลือกครบทุกระดับ = ไม่จำกัด (เก็บเป็น null)
-  const all = await call('PATCH', '/api/admin/rewards/' + gold.data.id, { tiers: ['SILVER', 'GOLD', 'PLATINUM'] }, adm);
+  const all = await call('PATCH', '/api/admin/rewards/' + gold.data.id, { tiers: ['SILVER', 'GOLD', 'PLATINUM', 'DIAMOND'] }, adm);
   assert.equal(all.data.tiers, null);
   assert.equal(all.data.name, 'ของ Gold');
 
@@ -721,4 +721,65 @@ t('ริชเมนู: ดึงเมนูที่ใช้อยู่ใ
     r = (await call('GET', '/api/admin/richmenus?brand=narai', undefined, adm)).data;
     assert.equal(r.live, 'none'); assert.equal(r.liveView, null);
   } finally { globalThis.fetch = realFetch; delete process.env.LINE_NARAI_TOKEN; delete process.env.LIFF_ID; }
+});
+
+test('รอบส่งคูปอง: ทุกเดือน (วันที่เกินเดือน) · ทุกสัปดาห์ · ครั้งเดียว (เวลาไทย)', async () => {
+  const { lastRound, nextRound } = await import('../src/services/rounds.js');
+  const at = (s) => new Date(s);
+  // 31 ทุกเดือน: ก.พ. 2027 มี 28 วัน → ส่ง 28 ก.พ. 09:00 น. ไทย (02:00Z)
+  const m31 = { sched_kind: 'monthly', sched_day: 31, sched_time: '09:00' };
+  assert.equal(lastRound(m31, at('2027-03-10T00:00:00Z')).at.toISOString(), '2027-02-28T02:00:00.000Z');
+  assert.equal(lastRound(m31, at('2027-03-10T00:00:00Z')).key, '2027-02');
+  assert.equal(nextRound(m31, at('2027-03-10T00:00:00Z')).at.toISOString(), '2027-03-31T02:00:00.000Z');
+  // วันที่ 1 เวลา 09:00: ก่อนเวลาในวันที่ 1 ยังเป็นรอบเดือนก่อน
+  const m1 = { sched_kind: 'monthly', sched_day: 1, sched_time: '09:00' };
+  assert.equal(lastRound(m1, at('2026-11-01T01:59:00Z')).key, '2026-10');
+  assert.equal(lastRound(m1, at('2026-11-01T02:00:00Z')).key, '2026-11');
+  assert.equal(nextRound(m1, at('2026-12-15T00:00:00Z')).at.toISOString(), '2027-01-01T02:00:00.000Z');
+  // ทุกวันจันทร์ 18:30 (2026-10-19 เป็นวันจันทร์)
+  const w = { sched_kind: 'weekly', sched_day: 1, sched_time: '18:30' };
+  assert.equal(lastRound(w, at('2026-10-21T05:00:00Z')).at.toISOString(), '2026-10-19T11:30:00.000Z');
+  assert.equal(lastRound(w, at('2026-10-21T05:00:00Z')).key, 'W2026-10-19');
+  assert.equal(nextRound(w, at('2026-10-21T05:00:00Z')).at.toISOString(), '2026-10-26T11:30:00.000Z');
+  // ครั้งเดียว
+  const o = { sched_kind: 'once', sched_date: '2026-12-25', sched_time: '10:00' };
+  assert.equal(lastRound(o, at('2026-12-25T02:59:00Z')), null);
+  assert.equal(lastRound(o, at('2026-12-25T03:00:00Z')).key, 'once');
+  assert.equal(nextRound(o, at('2026-12-26T00:00:00Z')), null);
+});
+
+t('ระดับ Diamond + คูปองของขวัญส่งอัตโนมัติตามรอบ (จำกัดคนต่อรอบ · หลายใบต่อคน · ไม่ส่งซ้ำ)', async () => {
+  const adm = { 'x-dev-staff': 'S002' };
+  const rule = (await call('GET', '/api/admin/earn-rules', undefined, adm)).data.find((r) => r.brand_id === 'humlai');
+  const put = (tiers) => call('PUT', '/api/admin/earn-rules/humlai', { baht: rule.baht_per_unit, pts: rule.points_per_unit, base: rule.base_amount, rounding: rule.rounding, welcome: rule.welcome_points,
+    expiryMonths: rule.expiry_months, backdays: rule.backdate_days, tiers, promo: { on: rule.promo_on, day: rule.promo_day, mult: rule.promo_mult } }, adm);
+  assert.equal((await put({ gold: 1, platinum: 2, diamond: 2 })).status, 400);              // Diamond ต้องมากกว่า Platinum
+  assert.equal((await put({ gold: 1, platinum: 2, diamond: 3 })).status, 200);
+  try {
+    const list = (await call('GET', '/api/admin/members?brand=humlai&tier=DIAMOND&size=100', undefined, adm)).data;
+    assert.ok(list.total >= 2, 'ต้องมีสมาชิก Diamond อย่างน้อย 2 คน');
+    assert.ok(list.rows.every((m) => m.tier === 'DIAMOND' && m.earned >= 3));
+    const base = { brand: 'humlai', kind: 'gift', title: 'ของขวัญรายเดือน Diamond', type: 'baht', value: 30, min: 0, validity: 'days', days: 30, useDays: 127, active: true, tiers: ['DIAMOND'] };
+    assert.equal((await call('POST', '/api/admin/coupon-templates', { ...base, autoSend: true }, adm)).status, 400);   // ยังไม่เลือกรอบ
+    const day = new Date(Date.now() + 7 * 3600e3).getUTCDate();
+    const c = await call('POST', '/api/admin/coupon-templates', { ...base, autoSend: true, schedKind: 'monthly', schedDay: day, schedTime: '00:00', roundLimit: 2, roundPick: 'points', perMember: 2 }, adm);
+    assert.equal(c.status, 200, JSON.stringify(c.data));
+    assert.equal(c.data.auto_send, true); assert.deepEqual(c.data.audience_tiers, ['DIAMOND']); assert.equal(c.data.sched_time, '00:00');
+    // เพิ่งเปิดส่งอัตโนมัติ: รอบวันนี้ 00:00 ผ่านไปแล้ว ไม่ส่งย้อนหลัง
+    assert.equal((await mods.worker.giftRounds()).filter((r) => r.templateId === c.data.id).length, 0);
+    const pv = await call('POST', '/api/admin/coupon-rounds/preview', { brand: 'humlai', tiers: ['DIAMOND'], schedKind: 'monthly', schedDay: day, schedTime: '00:00', roundLimit: 2, perMember: 2 }, adm);
+    assert.equal(pv.data.eligible, list.total); assert.equal(pv.data.members, 2); assert.ok(pv.data.next);
+    // จำลองว่าตั้งไว้ก่อนรอบวันนี้
+    await mods.db.q("UPDATE coupon_templates SET sched_since = now() - interval '40 days' WHERE id = $1", [c.data.id]);
+    const run = (await mods.worker.giftRounds()).find((r) => r.templateId === c.data.id);
+    assert.ok(run, 'ต้องส่งรอบนี้');
+    assert.equal(run.eligible, list.total); assert.equal(run.members, 2); assert.equal(run.issued, 4);
+    assert.equal((await mods.worker.giftRounds()).filter((r) => r.templateId === c.data.id).length, 0);   // รอบเดิมไม่ส่งซ้ำ
+    const got = await mods.db.q('SELECT member_id, count(*)::int AS n FROM member_coupons WHERE template_id = $1 GROUP BY member_id', [c.data.id]);
+    assert.equal(got.length, 2); assert.ok(got.every((g) => g.n === 2));
+    const rounds = (await call('GET', '/api/admin/coupon-templates/' + c.data.id + '/rounds', undefined, adm)).data;
+    assert.equal(rounds.length, 1); assert.equal(rounds[0].issued, 4); assert.equal(rounds[0].used, 0);
+    const listed = (await call('GET', '/api/admin/coupon-templates?brand=humlai', undefined, adm)).data.find((x) => x.id === c.data.id);
+    assert.equal(listed.last_round.issued, 4); assert.ok(listed.next_round);
+  } finally { await put({ gold: rule.gold_at, platinum: rule.platinum_at, diamond: null }); }
 });

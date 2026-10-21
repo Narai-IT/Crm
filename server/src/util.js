@@ -82,10 +82,20 @@ export function calcPoints(rule, { subtotal, total }, at = new Date()) {
   if (rule.promo_on && new Date(at).getDay() === rule.promo_day) p = Math.floor(p * Number(rule.promo_mult));
   return Math.max(0, p);
 }
+// ระดับสมาชิกจากแต้มที่ได้ใน 12 เดือน · Diamond ใช้เมื่อกฎตั้ง diamond_at ไว้
 export function tierOf(rule, earned12m) {
-  if (earned12m >= rule.platinum_at) return { name: 'PLATINUM', next: null, need: 0, at: earned12m, max: rule.platinum_at };
+  const d = rule.diamond_at;
+  if (d && earned12m >= d) return { name: 'DIAMOND', next: null, need: 0, at: earned12m, max: d };
+  if (earned12m >= rule.platinum_at) return d ? { name: 'PLATINUM', next: 'Diamond', need: d - earned12m, at: earned12m, max: d } : { name: 'PLATINUM', next: null, need: 0, at: earned12m, max: rule.platinum_at };
   if (earned12m >= rule.gold_at) return { name: 'GOLD', next: 'Platinum', need: rule.platinum_at - earned12m, at: earned12m, max: rule.platinum_at };
   return { name: 'SILVER', next: 'Gold', need: rule.gold_at - earned12m, at: earned12m, max: rule.gold_at };
+}
+export const TIER_KEYS = ['SILVER', 'GOLD', 'PLATINUM', 'DIAMOND'];
+// SQL ระดับสมาชิกจากคอลัมน์แต้ม 12 เดือน (ค่าเกณฑ์เป็นตัวเลขจากกฎ จึงต่อเป็นข้อความได้)
+export function tierSql(rule, col) {
+  if (!rule) return "'SILVER'";
+  const n = (v) => Math.max(0, parseInt(v, 10) || 0);
+  return `CASE ${rule.diamond_at ? `WHEN ${col} >= ${n(rule.diamond_at)} THEN 'DIAMOND' ` : ''}WHEN ${col} >= ${n(rule.platinum_at)} THEN 'PLATINUM' WHEN ${col} >= ${n(rule.gold_at)} THEN 'GOLD' ELSE 'SILVER' END`;
 }
 export function couponDiscount(c, subtotal) {
   if (!c || c.status !== 'ready' || subtotal < Number(c.min_spend || 0)) return 0;

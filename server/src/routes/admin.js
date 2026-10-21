@@ -6,6 +6,8 @@ import { checkPassword, hashPassword, signToken, maskPhone } from '../util.js';
 import * as core from '../services/core.js';
 import { queueMessage } from '../services/line.js';
 import * as rm from '../services/richmenu.js';
+import { nextRound, roundAudience } from '../services/rounds.js';
+import { TIER_KEYS, tierSql } from '../util.js';
 import { COUPON_SQL, couponView } from './liff.js';
 
 const actor = (s) => ({ type: 'staff', id: s.id, name: s.name });
@@ -84,7 +86,11 @@ function templateFields(b) {
   if (!(useDays >= 1 && useDays <= 127)) throw bad('days_invalid', 'เลือกวันที่ใช้คูปองได้อย่างน้อย 1 วัน');
   const code = kind === 'code' ? String(b.code || '').trim().toUpperCase() : null;
   if (kind === 'code' && !/^[A-Z0-9]{4,20}$/.test(code)) throw bad('code_invalid', 'โค้ดต้องเป็นตัวอังกฤษหรือตัวเลข 4-20 ตัว');
-  const tier = ['SILVER', 'GOLD', 'PLATINUM'].includes(b.tier) ? b.tier : 'all';
+  // ระดับที่ได้คูปอง: เลือกได้หลายระดับ (ไม่เลือก/เลือกครบ = ทุกระดับ) · รองรับค่าเดิม tier ระดับเดียว
+  const tierList = Array.isArray(b.tiers) ? TIER_KEYS.filter((x) => b.tiers.includes(x)) : TIER_KEYS.includes(b.tier) ? [b.tier] : [];
+  if (Array.isArray(b.tiers) && !tierList.length) throw bad('tier_required', 'เลือกระดับสมาชิกอย่างน้อย 1 ระดับ');
+  const tiers = tierList.length && tierList.length < TIER_KEYS.length ? tierList : null;
+  const sched = schedFields(kind, b);
   // สาขาที่สมัคร (เฉพาะคูปองต้อนรับ) · ว่าง = ทุกสาขา
   const branchIds = kind === 'welcome' && Array.isArray(b.branchIds) ? [...new Set(b.branchIds.map(String))] : null;
   if (branchIds && !branchIds.length) throw bad('branch_required', 'เลือกสาขาอย่างน้อย 1 สาขา หรือเลือก "ทุกสาขา"');
@@ -94,8 +100,35 @@ function templateFields(b) {
   const cond = [min ? 'ขั้นต่ำ ' + min + ' บาท' : '', maxDiscount ? 'ลดสูงสุด ' + maxDiscount + ' บาท' : '',
     useDays === 127 ? '' : 'ใช้ได้วัน ' + DAY_SHORT.filter((_, i) => useDays & (1 << i)).join(' '), '1 ใบใช้ได้ 1 ครั้ง'].filter(Boolean).join(' · ');
   return { kind, title, description: String(b.description || '').trim().slice(0, 1000), imageId: b.imageId ? parseInt(b.imageId, 10) : null, type: style === 'pct' ? 'pct' : 'baht',
-    value, min, maxDiscount, big, small, cond, validity, validFrom, validTo, days, issueFrom, issueTo, tier, followersOnly: !!b.followersOnly, useDays,
+    value, min, maxDiscount, big, small, cond, validity, validFrom, validTo, days, issueFrom, issueTo, tier: 'all', tiers, sched, followersOnly: !!b.followersOnly, useDays,
     maxIssue: optInt(b.maxIssue) || null, code, active: b.active !== false, branchIds };
+}
+// ของขวัญส่งอัตโนมัติตามรอบ (เฉพาะประเภทของขวัญ)
+function schedFields(kind, b) {
+  const auto = kind === 'gift' && !!b.autoSend;
+  if (!auto) return { auto: false, kind: null, day: null, date: null, time: '09:00', limit: null, pick: 'points', perMember: 1, notify: false };
+  const sk = ['monthly', 'weekly', 'once'].includes(b.schedKind) ? b.schedKind : null;
+  if (!sk) throw bad('sched_invalid', 'เลือกรอบส่ง');
+  const day = sk === 'once' ? null : parseInt(b.schedDay, 10);
+  if (sk === 'monthly' && !(day >= 1 && day <= 31)) throw bad('sched_invalid', 'เลือกวันที่ส่ง (1 - 31)');
+  if (sk === 'weekly' && !(day >= 0 && day <= 6)) throw bad('sched_invalid', 'เลือกวันที่ส่งในสัปดาห์');
+  const date = sk === 'once' ? String(b.schedDate || '').slice(0, 10) : null;
+  if (sk === 'once' && !/^\d{4}-\d{2}-\d{2}$/.test(date)) throw bad('sched_invalid', 'เลือกวันที่ส่ง');
+  const time = String(b.schedTime || '09:00').slice(0, 5);
+  if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(time)) throw bad('sched_invalid', 'เวลาส่งไม่ถูกต้อง');
+  const limit = b.roundLimit === '' || b.roundLimit == null ? null : parseInt(b.roundLimit, 10);
+  if (limit !== null && !(limit >= 1 && limit <= 1000000)) throw bad('sched_invalid', 'จำนวนคนต่อรอบต้องเป็นตัวเลขตั้งแต่ 1');
+  const perMember = parseInt(b.perMember, 10) || 1;
+  if (!(perMember >= 1 && perMember <= 10)) throw bad('sched_invalid', 'จำนวนใบต่อคนต่อรอบต้องอยู่ระหว่าง 1 - 10');
+  return { auto, kind: sk, day, date, time, limit, pick: ['points', 'recent', 'random'].includes(b.roundPick) ? b.roundPick : 'points', perMember, notify: !!b.notifyLine };
+}
+// บันทึกระดับ + รอบส่ง · sched_since = เวลาที่เริ่มนับรอบ (เปลี่ยนเมื่อเปิดส่งอัตโนมัติหรือเปลี่ยนรอบ ไม่ส่งรอบที่ผ่านไปแล้วย้อนหลัง)
+async function saveAudience(db, id, f) {
+  const x = f.sched;
+  await db.q(`UPDATE coupon_templates SET audience_tiers = $2,
+      sched_since = CASE WHEN $3 AND (NOT auto_send OR sched_since IS NULL OR sched_kind IS DISTINCT FROM $4 OR sched_day IS DISTINCT FROM $5 OR sched_date IS DISTINCT FROM $6::date OR sched_time IS DISTINCT FROM $7::time) THEN now() ELSE sched_since END,
+      auto_send = $3, sched_kind = $4, sched_day = $5, sched_date = $6::date, sched_time = $7::time, round_limit = $8, round_pick = $9, per_member = $10, notify_line = $11 WHERE id = $1`,
+    [id, f.tiers, x.auto, x.kind, x.day, x.date, x.time, x.limit, x.pick, x.perMember, x.notify]);
 }
 const hhmm = (v) => { const x = String(v || '').trim(); if (!x) return null; if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(x.slice(0, 5))) throw bad('time_invalid', 'เวลาไม่ถูกต้อง'); return x.slice(0, 5); };
 function branchFields(b) {
@@ -143,7 +176,7 @@ function rewardFields(b) {
     kind, templateId, description: String(b.description || '').trim().slice(0, 1000), imageId: b.imageId ? parseInt(b.imageId, 10) : null,
     tiers: tiers.length && tiers.length < TIERS.length ? tiers : null, limitCount, limitPeriod, startDate, endDate };
 }
-const TIERS = ['SILVER', 'GOLD', 'PLATINUM'];
+const TIERS = TIER_KEYS;
 const PERIODS = ['day', 'week', 'month', 'year', 'all'];
 // ของรางวัลแบบคูปอง: ต้องเป็นคูปองของแบรนด์เดียวกันที่สร้างในเมนูคูปอง (ไม่ใช่คูปองภายในของรางวัลอื่น)
 async function couponForReward(db, brandId, templateId) {
@@ -184,8 +217,7 @@ export function audienceSql(segment) {
 
 /* ---------------- สมาชิก: ขอบเขต แท็ก ---------------- */
 // สมาชิกของแบรนด์ ($1) = สมัครที่แบรนด์นี้ หรือเคยผูก/มีแต้มกับแบรนด์นี้
-const MEMBER_SCOPE = `(m.joined_brand_id = $1 OR EXISTS (SELECT 1 FROM member_brand_links k WHERE k.member_id = m.id AND k.brand_id = $1)
-  OR EXISTS (SELECT 1 FROM point_ledger l WHERE l.member_id = m.id AND l.brand_id = $1))`;
+const MEMBER_SCOPE = core.MEMBER_SCOPE;
 const MEMBER_COLS = `m.id, m.full_name, m.phone, m.created_at, m.home_branch_id, m.birth_date,
   COALESCE((SELECT balance FROM wallets w WHERE w.member_id = m.id AND w.brand_id = $1), 0)::int AS points,
   COALESCE((SELECT sum(points) FROM point_ledger l WHERE l.member_id = m.id AND l.brand_id = $1 AND l.points > 0 AND l.entry_type <> 'merge' AND l.created_at > now() - interval '365 days'), 0)::int AS earned,
@@ -321,20 +353,20 @@ export default function (r) {
     const all = sp.get('all') === '1';
     const size = all ? 5000 : Math.min(100, Math.max(5, parseInt(sp.get('size'), 10) || 10));
     const page = all ? 1 : Math.max(1, parseInt(sp.get('page'), 10) || 1);
-    const rule = await one('SELECT gold_at, platinum_at FROM earn_rules WHERE brand_id = $1 AND effective_to IS NULL', [brand]);
+    const rule = await one('SELECT gold_at, platinum_at, diamond_at FROM earn_rules WHERE brand_id = $1 AND effective_to IS NULL', [brand]);
     const args = [brand]; const where = [];
     const term = String(sp.get('q') || '').trim();
     if (term) { args.push(term); where.push(`(m.id ILIKE '%' || $${args.length} || '%' OR m.full_name ILIKE '%' || $${args.length} || '%' OR m.phone LIKE '%' || $${args.length} || '%')`); }
     if (sp.get('branch')) { args.push(sp.get('branch')); where.push(`m.home_branch_id = $${args.length}`); }
     if (sp.get('tag')) where.push(await tagCond(brand, parseInt(sp.get('tag'), 10), args));
-    const tier = sp.get('tier'); const g = rule ? rule.gold_at : 0; const pl = rule ? rule.platinum_at : 0;
-    const tierCond = tier === 'SILVER' ? `earned < ${g}` : tier === 'GOLD' ? `earned >= ${g} AND earned < ${pl}` : tier === 'PLATINUM' ? `earned >= ${pl}` : 'true';
+    const tier = sp.get('tier');
+    const tierCond = TIER_KEYS.includes(tier) ? `${tierSql(rule, 'earned')} = '${tier}'` : 'true';
     const rows = await q(`WITH base AS (SELECT ${MEMBER_COLS} FROM members m WHERE m.status = 'active' AND ${MEMBER_SCOPE}${where.length ? ' AND ' + where.join(' AND ') : ''})
-      SELECT *, count(*) OVER()::int AS total FROM base WHERE ${tierCond} ORDER BY created_at DESC LIMIT ${size} OFFSET ${(page - 1) * size}`, args);
+      SELECT *, ${tierSql(rule, 'earned')} AS tier, count(*) OVER()::int AS total FROM base WHERE ${tierCond} ORDER BY created_at DESC LIMIT ${size} OFFSET ${(page - 1) * size}`, args);
     const tags = await tagsOf(brand, rows.map((r) => r.id));
     if (all) await core.audit({ q, one }, actor(s), 'export_members', { type: 'brand', id: brand }, 'ดาวน์โหลดรายชื่อสมาชิก ' + rows.length + ' คน');
     return { total: rows[0] ? rows[0].total : 0, page, size, rows: rows.map((m) => ({ ...m, total: undefined, phone: s.fullPii ? m.phone : maskPhone(m.phone),
-      tier: !rule || m.earned < g ? 'SILVER' : m.earned < pl ? 'GOLD' : 'PLATINUM', tags: tags[m.id] || [] })) };
+      tags: tags[m.id] || [] })) };
   });
   // พนักงานเพิ่มสมาชิกเอง (ลูกค้ายินยอมที่ร้าน) · ได้แต้ม/คูปองต้อนรับเหมือนสมัครผ่าน LINE
   r.post('/api/admin/members', async (req, b) => {
@@ -461,11 +493,13 @@ export default function (r) {
   r.put('/api/admin/earn-rules/:brand', async (req, b, _u, p) => {
     const s = await staffUser(req); requirePage(s, 'rules'); requireBrand(s, p.brand);
     if (!(Number(b.baht) > 0) || !(Number(b.pts) >= 0)) throw bad('rule_invalid', 'อัตราแต้มไม่ถูกต้อง');
+    const diamond = b.tiers?.diamond === '' || b.tiers?.diamond == null ? null : parseInt(b.tiers.diamond, 10);
+    if (diamond !== null && !(diamond > (Number(b.tiers?.platinum) || 0))) throw bad('tier_invalid', 'แต้มระดับ Diamond ต้องมากกว่า Platinum (เว้นว่าง = ไม่ใช้ระดับ Diamond)');
     return tx(async (db) => {
       const old = await db.one('UPDATE earn_rules SET effective_to = now() WHERE brand_id = $1 AND effective_to IS NULL RETURNING *', [p.brand]);
-      const nw = await db.one(`INSERT INTO earn_rules (brand_id, baht_per_unit, points_per_unit, base_amount, rounding, expiry_months, welcome_points, backdate_days, gold_at, platinum_at, promo_on, promo_mult, promo_day, created_by)
-        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) RETURNING *`,
-        [p.brand, b.baht, b.pts, b.base || 'net', b.rounding || 'floor', b.expiryMonths ?? 12, b.welcome ?? 0, b.backdays ?? 3, b.tiers?.gold ?? 0, b.tiers?.platinum ?? 0, !!b.promo?.on, b.promo?.mult ?? 2, b.promo?.day ?? 3, s.id]);
+      const nw = await db.one(`INSERT INTO earn_rules (brand_id, baht_per_unit, points_per_unit, base_amount, rounding, expiry_months, welcome_points, backdate_days, gold_at, platinum_at, promo_on, promo_mult, promo_day, created_by, diamond_at)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) RETURNING *`,
+        [p.brand, b.baht, b.pts, b.base || 'net', b.rounding || 'floor', b.expiryMonths ?? 12, b.welcome ?? 0, b.backdays ?? 3, b.tiers?.gold ?? 0, b.tiers?.platinum ?? 0, !!b.promo?.on, b.promo?.mult ?? 2, b.promo?.day ?? 3, s.id, diamond]);
       await core.audit(db, actor(s), 'update_earn_rule', { type: 'brand', id: p.brand }, nw.baht_per_unit + ' บาท = ' + nw.points_per_unit + ' แต้ม · หมดอายุ ' + nw.expiry_months + ' เดือน' + (nw.promo_on ? ' · คูณ ' + nw.promo_mult : ''), old, nw);
       return nw;
     });
@@ -562,13 +596,36 @@ export default function (r) {
   });
 
   // จัดการคูปอง (ทุกประเภทที่ไม่ใช่แม่แบบภายในของรางวัล/แคมเปญ)
-  const TPL_SQL = `SELECT t.*, p.code, (SELECT count(*) FROM member_coupons c WHERE c.template_id = t.id)::int AS issued,
+  const TPL_SQL = `SELECT t.*, to_char(t.sched_date, 'YYYY-MM-DD') AS sched_date, to_char(t.sched_time, 'HH24:MI') AS sched_time, p.code,
+      (SELECT row_to_json(r) FROM (SELECT round_key, run_at, eligible, members, issued FROM coupon_rounds r WHERE r.template_id = t.id ORDER BY run_at DESC LIMIT 1) r) AS last_round, (SELECT count(*) FROM member_coupons c WHERE c.template_id = t.id)::int AS issued,
       (SELECT count(*) FROM member_coupons c WHERE c.template_id = t.id AND c.status = 'used')::int AS used
     FROM coupon_templates t LEFT JOIN promo_codes p ON p.coupon_template_id = t.id`;
   r.get('/api/admin/coupon-templates', async (req, _b, url) => {
     const s = await staffUser(req); requirePage(s, 'rewards');
     const bs = scopeBrands(s, url.searchParams.get('brand'));
-    return q(TPL_SQL + ` WHERE t.kind <> 'internal' AND (t.brand_id = ANY($1) OR (t.brand_id IS NULL AND $2)) ORDER BY t.is_active DESC, t.id DESC`, [bs, s.role === 'super']);
+    const rows = await q(TPL_SQL + ` WHERE t.kind <> 'internal' AND (t.brand_id = ANY($1) OR (t.brand_id IS NULL AND $2)) ORDER BY t.is_active DESC, t.id DESC`, [bs, s.role === 'super']);
+    return rows.map((t) => ({ ...t, next_round: t.auto_send ? (nextRound(t) || {}).at || null : null }));
+  });
+  // ของขวัญส่งอัตโนมัติ: ตอนนี้ตรงเงื่อนไขกี่คน + รอบถัดไป (ใช้ในฟอร์มก่อนบันทึก)
+  r.post('/api/admin/coupon-rounds/preview', async (req, b) => {
+    const s = await staffUser(req); requirePage(s, 'rewards'); requireBrand(s, b.brand);
+    const tierList = Array.isArray(b.tiers) ? TIER_KEYS.filter((x) => b.tiers.includes(x)) : [];
+    const aud = await roundAudience({ q, one }, { brandId: b.brand, tiers: tierList.length < TIER_KEYS.length ? tierList : null, followersOnly: !!b.followersOnly, pick: 'points' });
+    let sched = null; try { sched = schedFields('gift', { ...b, autoSend: true }); } catch (e) { /* ยังกรอกไม่ครบ */ }
+    const nx = sched && nextRound({ sched_kind: sched.kind, sched_day: sched.day, sched_date: sched.date, sched_time: sched.time });
+    const limit = sched && sched.limit;
+    return { eligible: tierList.length ? aud.length : 0, members: tierList.length ? (limit ? Math.min(limit, aud.length) : aud.length) : 0, perMember: sched ? sched.perMember : 1, next: nx ? nx.at : null };
+  });
+  // ประวัติรอบส่งของคูปอง + ใช้ไปแล้วกี่ใบในแต่ละรอบ
+  r.get('/api/admin/coupon-templates/:id/rounds', async (req, _b, _u, p) => {
+    const s = await staffUser(req); requirePage(s, 'rewards');
+    const t = await one('SELECT brand_id FROM coupon_templates WHERE id = $1', [parseInt(p.id, 10)]);
+    if (!t) throw notFound('ไม่พบคูปอง');
+    if (t.brand_id) requireBrand(s, t.brand_id);
+    return q(`SELECT r.round_key, r.due_at, r.run_at, r.eligible, r.members, r.issued,
+        (SELECT count(*) FROM member_coupons c WHERE c.template_id = r.template_id AND c.source = 'gift' AND c.status = 'used'
+          AND c.source_ref LIKE 'round:' || r.template_id || ':' || r.round_key || ':%')::int AS used
+      FROM coupon_rounds r WHERE r.template_id = $1 ORDER BY r.run_at DESC LIMIT 24`, [parseInt(p.id, 10)]);
   });
   r.post('/api/admin/coupon-templates', async (req, b) => {
     const s = await staffUser(req); requirePage(s, 'rewards'); requireBrand(s, b.brand);
@@ -580,6 +637,7 @@ export default function (r) {
         [b.brand, f.kind, f.title, f.description, f.imageId, f.big, f.small, f.cond, f.type, f.value, f.maxDiscount, f.min, f.validity, f.validFrom, f.validTo, f.days,
           f.issueFrom, f.issueTo, f.tier, f.followersOnly, f.useDays, f.maxIssue, f.active, s.id, await checkBranches(b.brand, f.branchIds)]);
       await saveCode(db, t, f, null);
+      await saveAudience(db, t.id, f);
       await core.audit(db, actor(s), 'create_coupon', { type: 'coupon', id: String(t.id) }, b.brand + ' · ' + KIND_NAMES[f.kind] + ' · ' + f.title);
       return db.one(TPL_SQL + ' WHERE t.id = $1', [t.id]);
     });
@@ -609,6 +667,8 @@ export default function (r) {
           [old.id, f.kind, f.title, f.description, f.imageId, f.big, f.small, f.cond, f.type, f.value, f.maxDiscount, f.min, f.validity, f.validFrom, f.validTo, f.days,
             f.issueFrom, f.issueTo, f.tier, f.followersOnly, f.useDays, f.maxIssue, f.active, await checkBranches(old.brand_id, f.branchIds)]);
         await saveCode(db, t, f, old.code);
+        await saveAudience(db, t.id, f);
+        t = await db.one('SELECT * FROM coupon_templates WHERE id = $1', [t.id]);
       }
       // โค้ดหมดเขตตามช่วงแจกของคูปอง
       if (old.code && onlyToggle) await db.q('UPDATE promo_codes SET expires_at = $2 WHERE code = $1', [old.code, t.is_active ? t.issue_to : new Date()]);

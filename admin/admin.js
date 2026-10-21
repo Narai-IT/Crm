@@ -157,7 +157,7 @@
       '</tbody></table></div></div>';
   }
 
-  const TIERS = [['SILVER', 'Silver'], ['GOLD', 'Gold'], ['PLATINUM', 'Platinum']];
+  const TIERS = [['SILVER', 'Silver'], ['GOLD', 'Gold'], ['PLATINUM', 'Platinum'], ['DIAMOND', 'Diamond']];
   const PERIODS = [['day', 'วัน'], ['week', 'สัปดาห์'], ['month', 'เดือน'], ['year', 'ปี'], ['all', 'ตลอดรายการ']];
   const today = () => new Date(Date.now() + 7 * 36e5).toISOString().slice(0, 10);
   function rewardState(r) {
@@ -241,10 +241,23 @@
     ['code', 'กรอกโค้ด', 'ลูกค้าได้คูปองเมื่อกรอกโค้ดในหน้าสมาชิก เมนู "คูปอง" (คนละ 1 ครั้ง)'],
     ['birthday', 'วันเกิด', 'แจกอัตโนมัติในเดือนเกิดของสมาชิก ปีละ 1 ครั้ง'],
     ['welcome', 'ต้อนรับ', 'แจกทันทีเมื่อสมัครสมาชิกผ่าน OA ของแบรนด์นี้'],
-    ['gift', 'ของขวัญ', 'พนักงานมอบให้รายคนจากเมนู "สมาชิก" เช่น ชดเชยลูกค้า หรือรางวัลพิเศษ']
+    ['gift', 'ของขวัญ', 'พนักงานมอบให้รายคนจากเมนู "สมาชิก" หรือตั้งให้ระบบส่งอัตโนมัติตามรอบ เช่น ทุกวันที่ 1 ของเดือน']
   ];
   const KIND_NAME = Object.fromEntries(KINDS.map((k) => [k[0], k[1]]));
-  const TIER_NAME = { all: 'ทุกระดับ', SILVER: 'Silver', GOLD: 'Gold', PLATINUM: 'Platinum' };
+  const TIER_NAME = { all: 'ทุกระดับ', SILVER: 'Silver', GOLD: 'Gold', PLATINUM: 'Platinum', DIAMOND: 'Diamond' };
+  const TIER_KEYS = ['SILVER', 'GOLD', 'PLATINUM', 'DIAMOND'];
+  const tiersText = (list) => (list && list.length ? list.map((x) => TIER_NAME[x] || x).join(', ') : 'ทุกระดับ');
+  const DAY_FULL = ['อาทิตย์', 'จันทร์', 'อังคาร', 'พุธ', 'พฤหัสบดี', 'ศุกร์', 'เสาร์'];
+  const PICK_NAME = { points: 'เลือกคนที่แต้มสะสมสูงสุดก่อน', recent: 'เลือกคนที่มาล่าสุดก่อน', random: 'สุ่ม' };
+  // ข้อความรอบส่ง เช่น "ทุกวันที่ 1 ของเดือน เวลา 09:00"
+  function schedText(x) {
+    if (!x || !x.kind) return '';
+    const tm = ' เวลา ' + (x.time || '09:00');
+    if (x.kind === 'monthly') return 'ทุกวันที่ ' + x.day + ' ของเดือน' + tm;
+    if (x.kind === 'weekly') return 'ทุกวัน' + DAY_FULL[x.day] + tm;
+    return 'ครั้งเดียว ' + (x.date ? date(x.date + 'T12:00:00+07:00') : '-') + tm;
+  }
+  const dt = (t) => (t ? date(t) + ' ' + new Date(t).toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Bangkok' }) : '-');
   const DAY_SHORT = ['อา', 'จ', 'อ', 'พ', 'พฤ', 'ศ', 'ส'];
   const daysText = (mask) => (mask === 127 ? 'ทุกวัน' : DAY_SHORT.filter((_, i) => mask & (1 << i)).join(' '));
   const couponStyle = (t) => (t.badge_big === 'ฟรี' ? 'free' : t.discount_type);
@@ -269,7 +282,8 @@
           const st = couponState(t);
           return '<tr class="' + (st[1] === 'pill' ? '' : 'off') + '"><td>' + (t.image_id ? '<img class="thumb" alt="" src="/api/public/coupon-images/' + t.image_id + '">' : '<span class="thumb badge">' + esc(t.badge_big) + '</span>') + '</td>' +
             '<td><b>' + esc(t.title) + '</b>' + (t.code ? '<br><small>โค้ด <b>' + esc(t.code) + '</b></small>' : '') + (t.brand_id ? '' : '<br><small class="muted">ทุกแบรนด์</small>') + '</td>' +
-            '<td>' + esc(KIND_NAME[t.kind] || t.kind) + (t.branch_ids ? '<br><small class="muted">สมัครที่ ' + esc(t.branch_ids.map(branchLabel).join(', ')) + '</small>' : '') + (t.audience_tier !== 'all' ? '<br><small class="muted">' + TIER_NAME[t.audience_tier] + '</small>' : '') + '</td>' +
+            '<td>' + esc(KIND_NAME[t.kind] || t.kind) + (t.branch_ids ? '<br><small class="muted">สมัครที่ ' + esc(t.branch_ids.map(branchLabel).join(', ')) + '</small>' : '') + (t.audience_tiers && t.audience_tiers.length ? '<br><small class="muted">' + esc(tiersText(t.audience_tiers)) + '</small>' : '') +
+              (t.auto_send ? '<br><small class="muted">ส่ง' + esc(schedText({ kind: t.sched_kind, day: t.sched_day, date: t.sched_date, time: t.sched_time })) + '</small><br><small class="muted">รอบถัดไป ' + (t.next_round && t.is_active ? esc(dt(t.next_round)) : '-') + '</small>' : '') + '</td>' +
             '<td>' + esc(valueText(t)) + (Number(t.min_spend) ? '<br><small class="muted">ขั้นต่ำ ' + fmt(t.min_spend) + ' บาท</small>' : '') + '</td>' +
             '<td><small>' + (t.validity === 'dates' ? date(t.valid_from) + ' - ' + date(t.valid_to) : t.valid_days + ' วันหลังได้รับ') + '<br>' + daysText(t.use_days) + '</small></td>' +
             '<td class="r num">' + fmt(t.issued) + (t.max_issue ? ' / ' + fmt(t.max_issue) : '') + '<br><small class="muted">ใช้แล้ว ' + fmt(t.used) + '</small></td>' +
@@ -277,16 +291,60 @@
             '<td class="r" style="white-space:nowrap">' + (t.brand_id || S.staff.role === 'super' ? '<button class="btn ghost sm" data-a="editCoupon" data-v="' + t.id + '">แก้ไข</button> <button class="btn ghost sm" data-a="toggleCoupon" data-v="' + t.id + '">' + (t.is_active ? 'ปิด' : 'เปิด') + '</button> <button class="btn danger sm" data-a="delCoupon" data-v="' + t.id + '">ลบ</button>' : '') + '</td></tr>';
         }).join('') + '</tbody></table></div>' : '<p class="muted">ยังไม่มีคูปองประเภทนี้</p>') + '</div>';
   }
+  // ของขวัญ: พนักงานมอบรายคน หรือส่งอัตโนมัติตามรอบ
+  function giftSection(x) {
+    const radio = (name, val, cur, label) => '<label class="check"><input type="radio" name="' + name + '" value="' + val + '"' + (String(cur) === String(val) ? ' checked' : '') + '>' + label + '</label>';
+    const rounds = (S.edit && S.edit.rounds) || [];
+    return '<fieldset class="field gift-sec" data-show="gift"><legend>วิธีส่ง</legend><div class="row-in">' + radio('autoSend', '0', x.auto_send ? 1 : 0, 'พนักงานมอบรายคน (เมนูสมาชิก)') + radio('autoSend', '1', x.auto_send ? 1 : 0, 'ส่งอัตโนมัติตามรอบ') + '</div>' +
+      '<div class="gift-auto" data-show="auto">' +
+        '<div class="row-in"><span>รอบส่ง</span><select name="schedKind" aria-label="รอบส่ง">' + [['monthly', 'ทุกเดือน'], ['weekly', 'ทุกสัปดาห์'], ['once', 'ครั้งเดียว']].map((o) => '<option value="' + o[0] + '"' + (x.sched_kind === o[0] ? ' selected' : '') + '>' + o[1] + '</option>').join('') + '</select>' +
+          '<span data-show="sm">วันที่</span><select name="schedDayM" data-show="sm" aria-label="วันที่ของเดือน">' + Array.from({ length: 31 }, (_, i) => '<option value="' + (i + 1) + '"' + (x.sched_kind === 'monthly' && Number(x.sched_day) === i + 1 ? ' selected' : '') + '>' + (i + 1) + '</option>').join('') + '</select>' +
+          '<span data-show="sw">วัน</span><select name="schedDayW" data-show="sw" aria-label="วันในสัปดาห์">' + DAY_FULL.map((d, i) => '<option value="' + i + '"' + (x.sched_kind === 'weekly' && Number(x.sched_day) === i ? ' selected' : '') + '>' + d + '</option>').join('') + '</select>' +
+          '<input type="date" name="schedDate" data-show="so" aria-label="วันที่ส่ง" value="' + esc(x.sched_date || '') + '">' +
+          '<span>เวลา</span><input type="time" name="schedTime" aria-label="เวลาส่ง" value="' + esc(x.sched_time || '09:00') + '"></div>' +
+        '<span class="hint" data-show="sm">ถ้าเดือนไหนไม่มีวันที่นี้ (เช่น 31) จะส่งวันสุดท้ายของเดือนนั้น</span>' +
+        '<div class="row-in"><span>จำนวนคนต่อรอบ</span>' + radio('rlim', '0', x.round_limit ? 1 : 0, 'ไม่จำกัด') + radio('rlim', '1', x.round_limit ? 1 : 0, 'จำกัด') +
+          '<input type="number" name="roundLimit" min="1" style="width:100px" aria-label="จำนวนคนต่อรอบ" value="' + esc(x.round_limit || '') + '" data-show="rlim"><span data-show="rlim">คน</span>' +
+          '<select name="roundPick" data-show="rlim" aria-label="วิธีเลือกคน">' + Object.entries(PICK_NAME).map(([k, v]) => '<option value="' + k + '"' + (x.round_pick === k ? ' selected' : '') + '>' + v + '</option>').join('') + '</select></div>' +
+        '<div class="row-in"><span>แต่ละคนได้</span><input type="number" name="perMember" min="1" max="10" style="width:80px" aria-label="ใบต่อคนต่อรอบ" value="' + esc(x.per_member || 1) + '"><span>ใบต่อรอบ</span>' +
+          '<small class="muted">ใบเก่าที่ยังไม่ใช้หมดอายุตามวันที่ตั้งไว้ ไม่ถูกยกเลิก</small></div>' +
+        '<label class="check"><input type="checkbox" name="notifyLine"' + (x.notify_line ? ' checked' : '') + '>แจ้งลูกค้าทาง LINE เมื่อได้รับคูปอง (นับโควต้าข้อความ OA · ส่งเฉพาะคนที่เป็นเพื่อนกับ OA)</label>' +
+        '<div class="round-box" id="c-round">กำลังคำนวณ…</div>' +
+        (rounds.length ? '<details class="rounds"><summary>ประวัติรอบส่ง (' + rounds.length + ')</summary><table class="tbl"><thead><tr><th>รอบ</th><th>ส่งเมื่อ</th><th class="r">ตรงเงื่อนไข</th><th class="r">ได้รับ</th><th class="r">ใบ</th><th class="r">ใช้แล้ว</th></tr></thead><tbody>' +
+          rounds.map((r) => '<tr><td>' + esc(r.round_key) + '</td><td>' + esc(dt(r.run_at)) + '</td><td class="r num">' + fmt(r.eligible) + '</td><td class="r num">' + fmt(r.members) + '</td><td class="r num">' + fmt(r.issued) + '</td><td class="r num">' + fmt(r.used) + '</td></tr>').join('') + '</tbody></table></details>' : '') +
+      '</div></fieldset>';
+  }
+  // รอบถัดไป + จำนวนคนที่ตรงเงื่อนไขตอนนี้ (ถามเซิร์ฟเวอร์เมื่อค่าที่เกี่ยวข้องเปลี่ยน)
+  let roundT = null; let roundKey = '';
+  function previewRound(b) {
+    const box = document.getElementById('c-round'); if (!box) return;
+    const key = JSON.stringify([b.tiers, b.followersOnly, b.schedKind, b.schedDay, b.schedDate, b.schedTime, b.roundLimit, b.perMember]);
+    if (key === roundKey) return;
+    roundKey = key; clearTimeout(roundT);
+    roundT = setTimeout(async () => {
+      try {
+        const r = await api('POST', '/api/admin/coupon-rounds/preview', { brand: S.brand, tiers: b.tiers, followersOnly: b.followersOnly, schedKind: b.schedKind, schedDay: b.schedDay, schedDate: b.schedDate, schedTime: b.schedTime, roundLimit: b.roundLimit, perMember: b.perMember });
+        if (roundKey !== key) return;
+        box.innerHTML = (r.next ? 'รอบถัดไป: <b>' + esc(dt(r.next)) + '</b>' : '<b>ไม่มีรอบถัดไป</b> (วันเวลาที่ตั้งผ่านไปแล้ว)') +
+          ' · ตอนนี้ตรงเงื่อนไข <b>' + fmt(r.eligible) + ' คน</b> → ส่ง <b>' + fmt(r.members) + ' คน × ' + fmt(r.perMember) + ' ใบ</b>' +
+          '<br><small class="muted">ระดับคิด ณ วันที่ส่ง · เปิดใช้งานหรือเปลี่ยนรอบแล้ว ระบบเริ่มนับจากรอบที่ยังไม่ถึงเวลา (ไม่ส่งย้อนหลัง)</small>';
+      } catch (e) { if (!e.silent) box.textContent = e.message; }
+    }, 350);
+  }
   function couponForm(id) {
     const t = id ? S.data.coupons.find((x) => String(x.id) === String(id)) : null;
     const x = t || { kind: 'general', title: '', description: '', discount_type: 'baht', badge_big: '', discount_value: '', min_spend: 0, max_discount: null, validity: 'days', valid_days: 30, valid_from: null, valid_to: null,
-      issue_from: null, issue_to: null, branch_ids: null, audience_tier: 'all', followers_only: false, use_days: 127, max_issue: null, is_active: true, code: '', issued: 0 };
+      issue_from: null, issue_to: null, branch_ids: null, audience_tiers: null, followers_only: false, use_days: 127, max_issue: null, is_active: true, code: '', issued: 0,
+      auto_send: false, sched_kind: 'monthly', sched_day: 1, sched_date: null, sched_time: '09:00', round_limit: null, round_pick: 'points', per_member: 1, notify_line: false };
     const style = t ? couponStyle(t) : 'baht'; const locked = t && t.issued > 0;
     const lockAttr = locked ? ' disabled' : '';
     const radio = (name, val, cur, label, extra) => '<label class="check"><input type="radio" name="' + name + '" value="' + val + '"' + (String(cur) === String(val) ? ' checked' : '') + (extra || '') + '>' + label + '</label>';
     return '<form class="coupon-ed" data-f="coupon" data-v="' + (id || '') + '"><div class="ed-form">' +
       (locked ? '<div class="note">แจกไปแล้ว ' + fmt(t.issued) + ' ใบ จึงเปลี่ยนประเภท มูลค่าส่วนลด และโค้ดไม่ได้ (คูปองที่ลูกค้าถืออยู่ต้องไม่เปลี่ยน) ถ้าจะเปลี่ยนให้ปิดใบนี้แล้วสร้างใหม่</div>' : '') +
       '<fieldset class="field"><legend>ประเภท</legend><div class="segr">' + KINDS.map((k) => '<label><input type="radio" name="kind" value="' + k[0] + '"' + (x.kind === k[0] ? ' checked' : '') + lockAttr + '><span>' + k[1] + '</span></label>').join('') + '</div><span class="hint" id="kind-hint"></span></fieldset>' +
+      giftSection(x) +
+      '<fieldset class="field" data-show="aud"><legend>ส่งให้ระดับ</legend><div class="row-in">' + TIER_KEYS.map((k) => '<label class="check tierc"><input type="checkbox" name="tiers" value="' + k + '"' + (!x.audience_tiers || !x.audience_tiers.length || x.audience_tiers.includes(k) ? ' checked' : '') + '>' + TIER_NAME[k] + '</label>').join('') + '</div>' +
+        '<div class="row-in"><span>และ</span><select id="c-fol" name="followersOnly" aria-label="เงื่อนไขเพื่อน OA"><option value="">สมาชิกทุกคน</option><option value="1"' + (x.followers_only ? ' selected' : '') + '>เฉพาะคนที่ยังเป็นเพื่อนกับ OA</option></select></div></fieldset>' +
       '<div class="field"><label for="c-title">ชื่อคูปอง</label><input id="c-title" name="title" maxlength="60" required value="' + esc(x.title) + '" data-autofocus></div>' +
       '<div class="field"><label for="c-desc">รายละเอียด</label><textarea id="c-desc" name="description" maxlength="1000" placeholder="เช่น ใช้ได้กับเมนูข้าวมันไก่ทุกจาน ไม่ร่วมกับโปรโมชั่นอื่น">' + esc(x.description) + '</textarea></div>' +
       '<div class="field"><span class="lbl">รูปคูปอง</span><div class="upl"><div class="upl-img" id="c-img">' + (S.edit.imageUrl ? '<img alt="" src="' + esc(S.edit.imageUrl) + '">' : '<span>ยังไม่มีรูป</span>') + '</div>' +
@@ -305,10 +363,8 @@
       '<fieldset class="field"><legend>วันที่ใช้ได้</legend><div class="row-in">' + radio('validity', 'dates', x.validity, 'ตามวันที่') + radio('validity', 'days', x.validity, 'ตามระยะเวลาหลังได้รับ') + '</div>' +
         '<div class="row-in" data-show="dates"><input type="date" name="validFrom" aria-label="วันเริ่มใช้" value="' + isoDay(x.valid_from) + '"> ถึง <input type="date" name="validTo" aria-label="วันสุดท้ายที่ใช้" value="' + isoDay(x.valid_to) + '"></div>' +
         '<div class="row-in" data-show="days"><input type="number" name="days" min="1" max="365" style="width:90px" aria-label="จำนวนวัน" value="' + esc(x.valid_days || 30) + '"> วัน นับจากวันที่ลูกค้าได้รับคูปอง</div></fieldset>' +
-      '<details class="adv"' + (t && (t.issue_from || t.issue_to || t.audience_tier !== 'all' || t.followers_only || t.use_days !== 127 || t.max_issue) ? ' open' : '') + '><summary>ขั้นสูง</summary>' +
+      '<details class="adv"' + (t && (t.issue_from || t.issue_to || t.use_days !== 127 || t.max_issue) ? ' open' : '') + '><summary>ขั้นสูง</summary>' +
         '<div class="field"><span class="lbl">ช่วงวันที่แจก</span><div class="row-in"><input type="date" name="issueFrom" aria-label="เริ่มแจก" value="' + isoDay(x.issue_from) + '"> ถึง <input type="date" name="issueTo" aria-label="สิ้นสุดการแจก" value="' + isoDay(x.issue_to) + '"></div><span class="hint">เว้นว่าง = แจกตั้งแต่บันทึกจนกว่าจะปิดคูปอง</span></div>' +
-        '<div class="grid"><div class="field"><label for="c-tier">ส่งให้ระดับ</label><select id="c-tier" name="tier">' + Object.entries(TIER_NAME).map(([k, v]) => '<option value="' + k + '"' + (x.audience_tier === k ? ' selected' : '') + '>' + v + '</option>').join('') + '</select></div>' +
-          '<div class="field"><label for="c-fol">และ</label><select id="c-fol" name="followersOnly"><option value="">สมาชิกทุกคน</option><option value="1"' + (x.followers_only ? ' selected' : '') + '>เฉพาะคนที่ยังเป็นเพื่อนกับ OA</option></select></div></div>' +
         '<fieldset class="field"><legend>ใช้ได้ในวัน</legend><div class="row-in">' + DAY_SHORT.map((d, i) => '<label class="check day"><input type="checkbox" name="d' + i + '"' + (x.use_days & (1 << i) ? ' checked' : '') + '>' + d + '</label>').join('') + '</div></fieldset>' +
         '<fieldset class="field"><legend>จำนวนคูปองทั้งหมด</legend><div class="row-in">' + radio('limit', '0', x.max_issue ? 1 : 0, 'ไม่จำกัด') + radio('limit', '1', x.max_issue ? 1 : 0, 'จำกัด') +
           '<input type="number" name="maxIssue" min="1" style="width:110px" aria-label="จำนวนใบ" value="' + esc(x.max_issue || '') + '" data-show="limit"> <span data-show="limit">ใบ (ใครได้ก่อนได้ก่อน)</span></div></fieldset>' +
@@ -324,14 +380,19 @@
     let mask = 0; for (let i = 0; i < 7; i++) if (v('d' + i)) mask |= 1 << i;
     return { brand: S.brand, kind: v('kind'), title: v('title'), description: v('description'), imageId: S.edit.imageId || null, type: v('type'), value: v('value'), maxDiscount: v('maxDiscount'),
       min: v('min'), code: v('code'), validity: v('validity'), validFrom: v('validFrom'), validTo: v('validTo'), days: v('days'), issueFrom: v('issueFrom'), issueTo: v('issueTo'),
-      tier: v('tier'), followersOnly: v('followersOnly') === '1', useDays: mask,
+      tiers: [...el.querySelectorAll('input[name="tiers"]:checked')].map((x) => x.value), followersOnly: v('followersOnly') === '1', useDays: mask,
+      autoSend: v('kind') === 'gift' && v('autoSend') === '1', schedKind: v('schedKind'), schedDay: v('schedKind') === 'weekly' ? v('schedDayW') : v('schedDayM'), schedDate: v('schedDate'), schedTime: v('schedTime'),
+      roundLimit: v('rlim') === '1' ? v('roundLimit') : '', roundPick: v('roundPick'), perMember: v('perMember'), notifyLine: v('notifyLine'),
       branchIds: v('kind') === 'welcome' && v('wscope') === 'some' ? [...el.querySelectorAll('input[name="wb"]:checked')].map((x) => x.value) : null, maxIssue: v('limit') === '1' ? v('maxIssue') : '', active: v('active') };
   }
   function syncCoupon(el) {
     const b = couponBody(el);
-    const show = { pct: b.type === 'pct', code: b.kind === 'code', welcome: b.kind === 'welcome', wbr: b.kind === 'welcome' && el.elements.wscope && el.elements.wscope.value === 'some', dates: b.validity === 'dates', days: b.validity !== 'dates', limit: el.elements.limit && el.elements.limit.value === '1' };
+    const show = { pct: b.type === 'pct', code: b.kind === 'code', welcome: b.kind === 'welcome', wbr: b.kind === 'welcome' && el.elements.wscope && el.elements.wscope.value === 'some', dates: b.validity === 'dates', days: b.validity !== 'dates', limit: el.elements.limit && el.elements.limit.value === '1',
+      gift: b.kind === 'gift', auto: b.autoSend, sm: b.schedKind === 'monthly', sw: b.schedKind === 'weekly', so: b.schedKind === 'once', rlim: el.elements.rlim && el.elements.rlim.value === '1',
+      aud: b.kind === 'general' || b.kind === 'birthday' || b.autoSend };
     el.querySelectorAll('[data-show]').forEach((x) => { x.hidden = !show[x.dataset.show]; });
     const k = KINDS.find((x) => x[0] === b.kind); document.getElementById('kind-hint').textContent = k ? k[2] : '';
+    if (b.autoSend) previewRound(b);
     document.getElementById('c-val-l').textContent = b.type === 'free' ? 'ราคาของที่แจก (บาท)' : b.type === 'pct' ? 'ลดกี่ %' : 'ลดกี่บาท';
     const big = b.type === 'free' ? 'ฟรี' : b.type === 'pct' ? '-' + (b.value || 0) + '%' : '-' + (b.value || 0);
     const exp = b.validity === 'dates' ? (b.validTo ? date(b.validTo + 'T12:00:00+07:00') : '-') : (b.days || 30) + ' วันหลังได้รับ';
@@ -341,7 +402,10 @@
       '<div class="prev-body"><b>' + esc(b.title || 'ชื่อคูปอง') + '</b>' + (b.description ? '<p>' + esc(b.description) + '</p>' : '') + '<span class="prev-btn">ใช้คูปอง</span></div>' +
       '<div class="prev-sec"><b>การใช้งาน</b>' + (b.validity === 'dates' ? row('วันที่เริ่มต้น', b.validFrom ? date(b.validFrom + 'T12:00:00+07:00') : '-') : '') + row('วันหมดอายุ', exp) + row('ใช้ได้', '1 ครั้ง') + (b.kind === 'code' ? row('โค้ด', (b.code || '-').toUpperCase()) : '') + '</div>' +
       (b.kind === 'welcome' ? '<div class="prev-sec"><b>ได้เมื่อ</b>' + row('สมัครที่สาขา', b.branchIds ? (b.branchIds.length ? b.branchIds.map(branchLabel).join(', ') : 'ยังไม่ได้เลือก') : 'ทุกสาขา') + '</div>' : '') +
-      '<div class="prev-sec"><b>เงื่อนไข</b>' + row('ขั้นต่ำ', Number(b.min) ? fmt(b.min) + ' บาท' : 'ไม่มี') + (b.type === 'pct' && Number(b.maxDiscount) ? row('ลดสูงสุด', fmt(b.maxDiscount) + ' บาท') : '') + row('ใช้ได้เมื่อ', daysText(b.useDays || 0) || '-') + row('จำกัด', b.maxIssue ? fmt(b.maxIssue) + ' ใบ' : 'ไม่จำกัด') + '</div>';
+      '<div class="prev-sec"><b>เงื่อนไข</b>' + row('ขั้นต่ำ', Number(b.min) ? fmt(b.min) + ' บาท' : 'ไม่มี') + (b.type === 'pct' && Number(b.maxDiscount) ? row('ลดสูงสุด', fmt(b.maxDiscount) + ' บาท') : '') + row('ใช้ได้เมื่อ', daysText(b.useDays || 0) || '-') +
+        ((b.kind === 'general' || b.kind === 'birthday' || b.autoSend) && b.tiers.length < TIER_KEYS.length ? row('ระดับ', tiersText(b.tiers)) : '') +
+        (b.autoSend ? row('รับได้', (Number(b.perMember) || 1) + ' ใบ ' + schedText({ kind: b.schedKind, day: Number(b.schedDay), date: b.schedDate, time: b.schedTime }).replace(/ เวลา .*/, '')) : '') +
+        row('จำกัด', b.maxIssue ? fmt(b.maxIssue) + ' ใบ' : 'ไม่จำกัด') + '</div>';
   }
   function rerenderCoupon() {
     const el = document.querySelector('form[data-f="coupon"]'); if (!el) return;
@@ -505,7 +569,8 @@
         fld('r-back', 'ขอแต้มย้อนหลังได้ (วัน)', num('r-back', 'backdays', r.backdate_days))) +
       sec('ระดับสมาชิก', 'คิดจากแต้มที่ได้ใน 12 เดือนล่าสุด',
         fld('r-gold', 'Gold เมื่อสะสมครบ', num('r-gold', 'gold', r.gold_at), 'แต้ม') +
-        fld('r-plat', 'Platinum เมื่อสะสมครบ', num('r-plat', 'platinum', r.platinum_at), 'แต้ม')) +
+        fld('r-plat', 'Platinum เมื่อสะสมครบ', num('r-plat', 'platinum', r.platinum_at), 'แต้ม') +
+        fld('r-dia', 'Diamond เมื่อสะสมครบ', '<input id="r-dia" name="diamond" type="number" min="1" placeholder="ไม่ใช้" value="' + (r.diamond_at || '') + '">', 'แต้ม · เว้นว่าง = ไม่ใช้ระดับ Diamond')) +
       sec('LINE', 'ข้อความแจ้งแต้มนับโควต้าข้อความของ LINE OA · ข้อความตอบรีวิวไม่นับ',
         fld('r-notify', 'แจ้งแต้มหลังชำระบิล', '<select id="r-notify" name="pointsNotify">' + opt([['off', 'ไม่แจ้ง'], ['all', 'แจ้งทุกบิล'], ['min', 'แจ้งเมื่อยอดบิลถึง…']], r.points_notify || 'off') + '</select>', 'ลูกค้าดูแต้มในบัตรสมาชิกได้ตลอด') +
         fld('r-nmin', 'ยอดบิลขั้นต่ำที่แจ้ง (บาท)', '<input id="r-nmin" name="pointsNotifyMin" type="number" min="0" value="' + (Number(r.points_notify_min) || '') + '">', 'ใช้เมื่อเลือก "แจ้งเมื่อยอดบิลถึง…"') +
@@ -517,7 +582,7 @@
   }
 
   /* ---------- สมาชิก: รายการซ้าย รายละเอียดขวา ---------- */
-  const TIER_LABEL = { SILVER: 'Silver', GOLD: 'Gold', PLATINUM: 'Platinum' };
+  const TIER_LABEL = { SILVER: 'Silver', GOLD: 'Gold', PLATINUM: 'Platinum', DIAMOND: 'Diamond' };
   const TAG_COLORS = [['blue', 'ฟ้า'], ['green', 'เขียว'], ['orange', 'ส้ม'], ['red', 'แดง'], ['purple', 'ม่วง'], ['gray', 'เทา']];
   const AUTO_RULES = [['new', 'สมาชิกใหม่ (สมัครภายใน N วัน)'], ['inactive', 'หายไป (เคยซื้อ แต่ไม่มา N วัน)'], ['visits', 'มาบ่อย (≥ N บิล ใน D วัน)'],
     ['spend', 'ยอดซื้อสูง (≥ X บาท ใน D วัน)'], ['birthday', 'เกิดเดือนนี้'], ['no_line', 'ยังไม่ผูก LINE']];
@@ -812,9 +877,11 @@
       await api('DELETE', '/api/admin/staff/' + encodeURIComponent(v)); toast('ลบผู้ใช้แล้ว'); await load();
     },
     cfilter: (v) => { S.cfilter = v; render(); },
-    editCoupon: (v) => {
+    editCoupon: async (v) => {
       const t = v ? S.data.coupons.find((x) => String(x.id) === String(v)) : null;
-      S.edit = { kind: 'coupon', id: v || null, imageId: t ? t.image_id : null, imageUrl: t && t.image_id ? '/api/public/coupon-images/' + t.image_id : null }; S.err = ''; render();
+      const rounds = t && t.kind === 'gift' ? await api('GET', '/api/admin/coupon-templates/' + t.id + '/rounds') : [];
+      roundKey = '';
+      S.edit = { kind: 'coupon', id: v || null, imageId: t ? t.image_id : null, imageUrl: t && t.image_id ? '/api/public/coupon-images/' + t.image_id : null, rounds }; S.err = ''; render();
     },
     toggleCoupon: async (v) => {
       const t = S.data.coupons.find((x) => String(x.id) === String(v));
@@ -884,7 +951,7 @@
     },
     rule: async (o) => {
       await api('PUT', '/api/admin/earn-rules/' + S.brand, { baht: o.baht, pts: o.pts, base: o.base, rounding: o.rounding, welcome: Number(o.welcome), expiryMonths: Number(o.expiryMonths), backdays: Number(o.backdays),
-        tiers: { gold: Number(o.gold), platinum: Number(o.platinum) }, promo: { on: o.promoOn, day: Number(o.promoDay), mult: Number(o.promoMult) } });
+        tiers: { gold: Number(o.gold), platinum: Number(o.platinum), diamond: o.diamond === '' ? null : Number(o.diamond) }, promo: { on: o.promoOn, day: Number(o.promoDay), mult: Number(o.promoMult) } });
       await api('PATCH', '/api/admin/brands/' + S.brand + '/notify', { pointsNotify: o.pointsNotify, pointsNotifyMin: o.pointsNotifyMin });
       await api('PATCH', '/api/admin/brands/' + S.brand + '/review', { reviewPoints: Number(o.reviewPoints) });
       await api('PATCH', '/api/admin/brands/' + S.brand + '/join', { oaBasicId: o.oaBasicId, requireFollow: o.requireFollow === '1' });

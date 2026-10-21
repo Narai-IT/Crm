@@ -20,7 +20,7 @@ export default function (r) {
     const rules = {};
     for (const x of await q('SELECT * FROM earn_rules WHERE effective_to IS NULL')) {
       rules[x.brand_id] = { baht: x.baht_per_unit, pts: x.points_per_unit, base: x.base_amount, rounding: x.rounding, expiryMonths: x.expiry_months, welcome: x.welcome_points,
-        backdays: x.backdate_days, tiers: { gold: x.gold_at, platinum: x.platinum_at }, promo: { on: x.promo_on, mult: x.promo_mult, day: x.promo_day } };
+        backdays: x.backdate_days, tiers: { gold: x.gold_at, platinum: x.platinum_at, diamond: x.diamond_at }, promo: { on: x.promo_on, mult: x.promo_mult, day: x.promo_day } };
     }
     const branches = (await q("SELECT *, to_char(open_time,'HH24:MI') AS o, to_char(close_time,'HH24:MI') AS c FROM branches ORDER BY id")).map((b) => ({
       id: b.id, brand: b.brand_id, name: b.name, open: b.o, close: b.c, phone: b.phone, earn: b.earn_enabled,
