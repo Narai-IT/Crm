@@ -77,11 +77,11 @@ export default function (r) {
   });
   r.post('/api/pos/members/wallet', async (req, body) => {
     const t = await posTerminal(req);
-    return tx((db) => core.posWallet(db, { memberId: memberOf(body), brandId: t.brandId, subtotal: body.subtotal, ref: body.ref ? String(body.ref) : null }));
+    return tx((db) => core.posWallet(db, { memberId: memberOf(body), brandId: t.brandId, subtotal: body.subtotal, ref: body.ref ? String(body.ref) : null, items: body.items }));
   });
   r.post('/api/pos/coupons/reserve', async (req, body) => {
     const t = await posTerminal(req);
-    const coupon = await tx((db) => core.reserveCoupon(db, { memberId: memberOf(body), brandId: t.brandId, couponId: body.couponId, ref: String(body.ref || ''), subtotal: body.subtotal, minutes: Number(body.minutes) || 30 }));
+    const coupon = await tx((db) => core.reserveCoupon(db, { memberId: memberOf(body), brandId: t.brandId, couponId: body.couponId, ref: String(body.ref || ''), subtotal: body.subtotal, minutes: Number(body.minutes) || 30, items: body.items }));
     return { coupon };
   }, (b, out) => 'จองคูปอง ' + (out?.coupon?.code || ''));
   r.post('/api/pos/coupons/release', async (req, body) => {
@@ -91,7 +91,7 @@ export default function (r) {
   r.post('/api/pos/redeem', async (req, body) => {
     const t = await posTerminal(req);
     if (!body.ref) throw bad('ref_required', 'ต้องมีรหัสบิลที่กำลังเปิด');
-    return tx((db) => core.redeemAtPos(db, { memberId: memberOf(body), brandId: t.brandId, rewardId: body.rewardId, ref: String(body.ref), subtotal: body.subtotal, minutes: Number(body.minutes) || 30 }));
+    return tx((db) => core.redeemAtPos(db, { memberId: memberOf(body), brandId: t.brandId, rewardId: body.rewardId, ref: String(body.ref), subtotal: body.subtotal, minutes: Number(body.minutes) || 30, items: body.items }));
   }, (b, out) => 'แลกแต้ม คงเหลือ ' + (out?.balance ?? ''));
   r.post('/api/pos/members/verify/send', async (req, body) => {
     const t = await posTerminal(req);
@@ -122,6 +122,26 @@ export default function (r) {
       refPosBillId: body.refPosBillId, by: by || { id: t.terminalId, name: 'เครื่อง ' + t.terminalId } }));
     return { requestId: row.id, status: row.status };
   });
+
+  // เมนูทั้งหมดของ POS (POS ส่งมาเองเมื่อแก้เมนูและทุก 30 นาที) ใช้เลือกของฟรี/เงื่อนไขสินค้าในหน้าคูปอง
+  // เมนูที่ไม่อยู่ในรายการล่าสุดถูกปิด (ไม่ลบ เพราะคูปองเก่าอาจอ้างถึง)
+  r.post('/api/pos/menu', async (req, body) => {
+    const t = await posTerminal(req);
+    if (!Array.isArray(body.items) || body.items.length > 5000) throw bad('items_invalid', 'รายการเมนูไม่ถูกต้อง');
+    const items = body.items.map((i) => ({ id: String(i.id || '').slice(0, 60), name: String(i.name || '').trim().slice(0, 300), category: i.category ? String(i.category).slice(0, 100) : null,
+      categoryName: i.categoryName ? String(i.categoryName).slice(0, 200) : null, price: Math.max(0, Number(i.price) || 0), active: i.active !== false })).filter((i) => i.id && i.name);
+    await tx(async (db) => {
+      await db.q('UPDATE pos_menu_items SET is_active = false WHERE brand_id = $1', [t.brandId]);
+      if (items.length) {
+        await db.q(`INSERT INTO pos_menu_items (brand_id, item_id, name, category, category_name, price, is_active, updated_at)
+          SELECT $1, x.id, x.name, x.category, x."categoryName", x.price, x.active, now() FROM jsonb_to_recordset($2::jsonb) AS x(id text, name text, category text, "categoryName" text, price numeric, active boolean)
+          ON CONFLICT (brand_id, item_id) DO UPDATE SET name = EXCLUDED.name, category = EXCLUDED.category, category_name = EXCLUDED.category_name, price = EXCLUDED.price, is_active = EXCLUDED.is_active, updated_at = now()`,
+        [t.brandId, JSON.stringify(items)]);
+      }
+      await db.q('UPDATE brands SET menu_synced_at = now() WHERE id = $1', [t.brandId]);
+    });
+    return { count: items.length };
+  }, (b, out) => 'ซิงก์เมนู ' + (out?.count ?? 0) + ' รายการ');
 
   r.get('/api/pos/bills', async (req) => {
     const t = await posTerminal(req);

@@ -289,3 +289,18 @@ details.adv[open] > *:not(summary) { margin-bottom: 12px; }
 .rounds summary { cursor: pointer; font-weight: 600; color: var(--ai); }
 .rounds .tbl { margin-top: 6px; font-size: 13px; }
 .check.tierc { border: 1px solid var(--line); border-radius: 999px; padding: 4px 12px; }
+
+/* ของฟรีจากเมนู POS + เงื่อนไขสินค้า */
+.mpick { border: 1px solid var(--line); border-radius: 10px; background: #fff; overflow: hidden; }
+.mpick .chips { display: flex; flex-wrap: wrap; gap: 6px; padding: 8px 10px; }
+.mpick .chip { display: inline-flex; align-items: center; gap: 4px; background: #FBF8F6; border: 1px solid var(--line); border-radius: 999px; padding: 3px 4px 3px 10px; font-size: 13px; }
+.mpick .chip.cat { background: var(--as); border-color: var(--as); color: var(--ai); font-weight: 600; }
+.mpick .chip .x { border: 0; background: none; color: var(--muted); font-size: 15px; padding: 0 6px; cursor: pointer; }
+.mpick .mp-q { width: 100%; border: 0; border-top: 1px solid var(--line); padding: 9px 12px; font-size: 14px; min-height: 40px; }
+.mp-list { max-height: 240px; overflow-y: auto; }
+.mp-list .mi { display: flex; width: 100%; gap: 10px; align-items: center; text-align: left; border: 0; border-top: 1px solid #F1ECE8; background: #fff; padding: 8px 12px; font-size: 14px; cursor: pointer; }
+.mp-list .mi:hover, .mp-list .mi:focus-visible { background: var(--as); }
+.mp-list .mi .p { margin-left: auto; color: var(--muted); font-size: 13px; white-space: nowrap; }
+.cond-sec { border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px; gap: 10px; }
+.cond-body { display: flex; flex-direction: column; gap: 10px; }
+.cond-sec input[type="number"] { min-height: 40px; border: 1px solid var(--line); border-radius: 10px; padding: 6px 10px; background: #fff; }

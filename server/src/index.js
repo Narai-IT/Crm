@@ -57,7 +57,7 @@ export function buildServer() {
     try {
       if (!m) throw new HttpError(404, 'not_found', 'ไม่พบ endpoint');
       if (req.method !== 'GET') {
-        raw = await readBody(req, path === '/api/admin/coupon-images' || path === '/api/admin/richmenus' ? 4e6 : 1e6);
+        raw = await readBody(req, path === '/api/admin/coupon-images' || path === '/api/admin/richmenus' || path === '/api/pos/menu' ? 4e6 : 1e6);
         if (raw.length) { try { body = JSON.parse(raw.toString('utf8')); } catch { throw new HttpError(400, 'bad_json', 'JSON ไม่ถูกต้อง'); } }
       }
       const [handler, summary] = m.handlers;

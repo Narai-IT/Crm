@@ -783,3 +783,57 @@ t('ระดับ Diamond + คูปองของขวัญส่งอั
     assert.equal(listed.last_round.issued, 4); assert.ok(listed.next_round);
   } finally { await put({ gold: rule.gold_at, platinum: rule.platinum_at, diamond: null }); }
 });
+
+t('เมนูจาก POS + คูปองของฟรี + เงื่อนไขสินค้าในบิล (หน้าร้านและตอนบันทึกบิล)', async () => {
+  const adm = { 'x-dev-staff': 'S002' };
+  const menu = [
+    { id: 'M1', name: 'ข้าวมันไก่ต้ม', category: 'chicken', categoryName: 'ข้าวมันไก่', price: 55 },
+    { id: 'M2', name: 'ข้าวมันไก่ทอด', category: 'chicken', categoryName: 'ข้าวมันไก่', price: 65 },
+    { id: 'M3', name: 'น้ำเก๊กฮวย', category: 'drink', categoryName: 'เครื่องดื่ม', price: 25 },
+    { id: 'M4', name: 'ซุปฟักตุ๋น', category: 'side', categoryName: 'ทานเล่น', price: 40 }];
+  const sync = await call('POST', '/api/pos/menu', { items: menu }, posHL01);
+  assert.equal(sync.status, 200, JSON.stringify(sync.data)); assert.equal(sync.data.count, 4);
+  const pm = (await call('GET', '/api/admin/pos-menu?brand=humlai', undefined, adm)).data;
+  assert.equal(pm.items.length, 4); assert.ok(pm.syncedAt); assert.deepEqual(pm.categories.map((c) => c.id).sort(), ['chicken', 'drink', 'side']);
+
+  const base = { brand: 'humlai', kind: 'gift', validity: 'days', days: 30, useDays: 127, active: true, min: 0 };
+  // ฟรีน้ำเก๊กฮวย เมื่อมีหมวดข้าวมันไก่รวม 2 จาน
+  const free = await call('POST', '/api/admin/coupon-templates', { ...base, title: 'ฟรีเก๊กฮวย', type: 'free', freeItems: [{ id: 'M3', name: 'น้ำเก๊กฮวย', price: 25 }],
+    condMode: 'any', condItems: [{ type: 'cat', id: 'chicken', name: 'ข้าวมันไก่' }], condQty: 2 }, adm);
+  assert.equal(free.status, 200, JSON.stringify(free.data));
+  assert.equal(Number(free.data.discount_value), 25); assert.match(free.data.condition_text, /ฟรี น้ำเก๊กฮวย/); assert.match(free.data.condition_text, /หมวดข้าวมันไก่ รวม 2 ชิ้นขึ้นไป/);
+  // ลด 20% เฉพาะซุปฟักตุ๋น
+  const soup = await call('POST', '/api/admin/coupon-templates', { ...base, title: 'ซุปลด 20%', type: 'pct', value: 20, condMode: 'all', condItems: [{ type: 'item', id: 'M4', name: 'ซุปฟักตุ๋น' }], condScope: 'items' }, adm);
+  assert.equal(soup.status, 200, JSON.stringify(soup.data));
+  assert.equal((await call('POST', '/api/admin/coupon-templates', { ...base, title: 'x', type: 'baht', value: 10, condMode: 'any', condItems: [] }, adm)).status, 400);
+
+  const mem = (await call('GET', '/api/admin/members?brand=humlai&size=5', undefined, adm)).data.rows[0].id;
+  const give = async (tpl) => (await call('POST', '/api/admin/members/' + mem + '/coupons', { templateId: tpl }, adm)).data.couponId;
+  const cFree = await give(free.data.id); const cSoup = await give(soup.data.id);
+  const wallet = async (items, subtotal) => (await call('POST', '/api/pos/members/wallet', { memberId: mem, subtotal, ref: 'cart-test', items }, posHL01)).data.coupons;
+  const pick = (list, id) => list.find((c) => c.id === String(id));
+
+  // POS เก่าไม่ส่งรายการ → ใช้ไม่ได้ บอกให้อัปเดต
+  let w = await wallet(undefined, 200);
+  assert.equal(pick(w, cFree).usable, false); assert.match(pick(w, cFree).reason, /อัปเดตเครื่อง POS/);
+  // มีข้าวมันไก่จานเดียว + เก๊กฮวย → ยังไม่ครบ 2 จาน
+  w = await wallet([{ name: 'ข้าวมันไก่ทอด', price: 65, qty: 1 }, { name: 'น้ำเก๊กฮวย', price: 25, qty: 1 }], 90);
+  assert.equal(pick(w, cFree).usable, false); assert.match(pick(w, cFree).reason, /อย่างน้อย 2 ชิ้น/);
+  // ข้าวมันไก่ 2 จาน (ชื่อเว้นวรรคต่างกันก็จับคู่ได้) แต่ไม่มีเก๊กฮวย
+  w = await wallet([{ name: ' ข้าวมันไก่ทอด ', price: 65, qty: 1 }, { name: 'ข้าวมันไก่ต้ม', price: 55, qty: 1 }], 120);
+  assert.equal(pick(w, cFree).usable, false); assert.match(pick(w, cFree).reason, /น้ำเก๊กฮวย/);
+  assert.equal(pick(w, cSoup).usable, false); assert.match(pick(w, cSoup).reason, /ซุปฟักตุ๋น/);
+  const cart = [{ name: 'ข้าวมันไก่ทอด', price: 65, qty: 1 }, { name: 'ข้าวมันไก่ต้ม', price: 55, qty: 1 }, { name: 'น้ำเก๊กฮวย', price: 25, qty: 2 }, { menuId: 'M4', name: 'ซุป (ถ้วยใหญ่)', price: 40, qty: 1 }];
+  w = await wallet(cart, 210);
+  assert.equal(pick(w, cFree).usable, true); assert.equal(pick(w, cFree).discount, 25);
+  assert.equal(pick(w, cSoup).usable, true); assert.equal(pick(w, cSoup).discount, 8);            // 20% ของซุป 40 บาท ไม่ใช่ทั้งบิล
+  const rs = await call('POST', '/api/pos/coupons/reserve', { memberId: mem, couponId: cFree, ref: 'cart-test', subtotal: 210, items: cart }, posHL01);
+  assert.equal(rs.status, 200, JSON.stringify(rs.data)); assert.equal(rs.data.coupon.discount, 25);
+  // บันทึกบิลแบบให้ CRM คิดส่วนลดเอง (ไม่ส่ง couponDiscount) · id ในบิลเป็นลำดับแถว ใช้ชื่อจับคู่
+  const sale = await call('POST', '/api/pos/transactions', { posBillId: 'CART-1', memberId: mem, couponIds: [cFree], couponRef: 'cart-test',
+    items: cart.map((i, n) => ({ id: String(n + 1), name: i.name, price: i.price, qty: i.qty })) }, posHL01);
+  assert.equal(sale.status, 200, JSON.stringify(sale.data)); assert.equal(Number(sale.data.discount), 25);
+  // เมนูที่หายไปจากรายการล่าสุดถูกปิด
+  await call('POST', '/api/pos/menu', { items: menu.slice(0, 3) }, posHL01);
+  assert.equal((await call('GET', '/api/admin/pos-menu?brand=humlai', undefined, adm)).data.items.length, 3);
+});
