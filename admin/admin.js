@@ -140,7 +140,7 @@
       (NO_BRAND.includes(S.page) ? '' : S.brands.length > 1 ? '<div class="bpick" role="group" aria-label="เลือกแบรนด์">' + S.brands.map((b) => '<button data-a="brand" data-v="' + b.id + '" aria-pressed="' + (b.id === S.brand) + '">' + esc(b.short_name) + '</button>').join('') + '</div>' : '<b>' + esc(brand().name) + '</b>') +
       '</div>' + views[S.page]() + '</main></div>' + (S.edit ? dialog() : '');
     const auto = document.querySelector('[data-autofocus]'); if (auto) auto.focus();
-    const cf = document.querySelector('form[data-f="coupon"]'); if (cf) syncCoupon(cf);
+    const cf = document.querySelector('form[data-f="coupon"]'); if (cf) { drawPick('free'); drawPick('cond'); syncCoupon(cf); }
     const rf = document.querySelector('form[data-f="reward"]'); if (rf) syncReward(rf);
     const tf = document.querySelector('form[data-f="tag"]'); if (tf) syncTagForm(tf);
   }
@@ -331,6 +331,38 @@
       } catch (e) { if (!e.silent) box.textContent = e.message; }
     }, 350);
   }
+  // ของฟรี (เลือกเมนูจาก POS) + เงื่อนไขสินค้าในบิล · ค่าที่เลือกเก็บใน S.edit.free / S.edit.cond แล้ววาดเฉพาะส่วนนี้ใหม่ (ฟอร์มที่กรอกไว้ไม่หาย)
+  function itemSections(locked) {
+    const e = S.edit; const menu = e.menu || { items: [], categories: [] }; const c = e.cond;
+    const radio = (name, val, cur, label) => '<label class="check"><input type="radio" name="' + name + '" value="' + val + '"' + (String(cur) === String(val) ? ' checked' : '') + '>' + label + '</label>';
+    const sync = menu.syncedAt ? 'เมนูจาก POS อัปเดตล่าสุด ' + dt(menu.syncedAt) + ' · ' + fmt(menu.items.length) + ' รายการ' : 'ยังไม่มีเมนูจาก POS (อัปเดตเครื่อง POS API แล้วรอสักครู่)';
+    return '<div class="field" data-show="free"><span class="lbl">ของที่ได้ฟรี (เลือกจากเมนู POS)</span>' +
+        '<div class="mpick"><div class="chips" id="pick-free-chips"></div>' + (locked ? '' : '<input class="mp-q" data-pick="free" placeholder="ค้นหาเมนู…" aria-label="ค้นหาเมนูของฟรี" autocomplete="off"><div class="mp-list" id="pick-free-list"></div>') + '</div>' +
+        '<span class="hint">ใช้ได้เมื่อบิลมีเมนูนี้อยู่แล้ว · ลดเท่าราคาเมนูนั้น 1 ชิ้น (เลือกหลายเมนู = ลดชิ้นที่ถูกที่สุด) · ไม่เลือกเมนู = ใส่ราคาของเองแบบเดิม</span><span class="hint">' + esc(sync) + '</span></div>' +
+      '<fieldset class="field cond-sec"><legend>เงื่อนไขสินค้าในบิล</legend><div class="row-in">' + radio('condMode', '', c.mode || '', 'ไม่มีเงื่อนไข') + radio('condMode', 'any', c.mode || '', 'ต้องมีอย่างใดอย่างหนึ่ง') + radio('condMode', 'all', c.mode || '', 'ต้องมีครบทุกรายการ') + '</div>' +
+        '<div class="cond-body" data-show="cond"><div class="mpick"><div class="chips" id="pick-cond-chips"></div><input class="mp-q" data-pick="cond" placeholder="ค้นหาเมนูหรือหมวด…" aria-label="ค้นหาเมนูหรือหมวดที่ต้องมี" autocomplete="off"><div class="mp-list" id="pick-cond-list"></div></div>' +
+        '<div class="row-in"><span>รวมกันอย่างน้อย</span><input type="number" name="condQty" min="1" max="99" style="width:80px" aria-label="จำนวนชิ้นขั้นต่ำ" value="' + esc(c.qty || 1) + '"><span>ชิ้น</span></div>' +
+        '<div class="row-in" data-show="notfree"><span>คิดส่วนลดจาก</span>' + radio('condScope', 'bill', c.scope || 'bill', 'ทั้งบิล') + radio('condScope', 'items', c.scope || 'bill', 'เฉพาะเมนูที่ตรงเงื่อนไข') + '</div>' +
+        (menu.items.length ? '' : '<span class="hint">' + esc(sync) + '</span>') + '</div></fieldset>';
+  }
+  const chipHtml = (kind, x, i, locked) => '<span class="chip' + (x.type === 'cat' ? ' cat' : '') + '">' + (x.type === 'cat' ? 'หมวด: ' : '') + esc(x.name) + (x.price !== undefined ? ' · ฿' + fmt(x.price) : '') +
+    (locked ? '' : '<button type="button" class="x" data-a="pickDel" data-v="' + kind + ':' + i + '" aria-label="เอาออก">×</button>') + '</span>';
+  function drawPick(kind) {
+    const e = S.edit; if (!e || e.kind !== 'coupon') return;
+    const list = kind === 'free' ? e.free : e.cond.items; const locked = kind === 'free' && e.locked;
+    const box = document.getElementById('pick-' + kind + '-chips');
+    if (box) box.innerHTML = list.length ? list.map((x, i) => chipHtml(kind, x, i, locked)).join('') : '<span class="muted" style="font-size:13px">' + (kind === 'free' ? 'ยังไม่ได้เลือกเมนู' : 'ยังไม่ได้เลือก') + '</span>';
+    const q = document.querySelector('.mp-q[data-pick="' + kind + '"]'); const out = document.getElementById('pick-' + kind + '-list');
+    if (!q || !out) return;
+    const term = q.value.trim().toLowerCase(); const menu = e.menu || { items: [], categories: [] };
+    if (!term) { out.innerHTML = ''; return; }
+    const has = (t, id) => list.some((x) => (x.type || 'item') === t && x.id === id);
+    const cats = kind === 'cond' ? menu.categories.filter((x) => x.name.toLowerCase().includes(term) && !has('cat', x.id)).slice(0, 4) : [];
+    const items = menu.items.filter((x) => (x.name.toLowerCase().includes(term) || String(x.category_name || '').toLowerCase().includes(term)) && !has('item', x.id)).slice(0, 10);
+    out.innerHTML = cats.map((x) => '<button type="button" class="mi" data-a="pickAdd" data-v="' + kind + ':cat:' + esc(x.id) + '"><b>หมวด: ' + esc(x.name) + '</b></button>').join('') +
+      items.map((x) => '<button type="button" class="mi" data-a="pickAdd" data-v="' + kind + ':item:' + esc(x.id) + '"><span>' + esc(x.name) + '</span><span class="p">' + esc(x.category_name || '') + ' · ฿' + fmt(x.price) + '</span></button>').join('') ||
+      '<div class="muted" style="padding:8px 12px;font-size:13px">' + (menu.items.length ? 'ไม่พบเมนู "' + esc(q.value.trim()) + '"' : 'ยังไม่มีเมนูจาก POS') + '</div>';
+  }
   function couponForm(id) {
     const t = id ? S.data.coupons.find((x) => String(x.id) === String(id)) : null;
     const x = t || { kind: 'general', title: '', description: '', discount_type: 'baht', badge_big: '', discount_value: '', min_spend: 0, max_discount: null, validity: 'days', valid_days: 30, valid_from: null, valid_to: null,
@@ -352,11 +384,12 @@
         '<span class="hint">แนะนำ 810 × 270 px (3:1) · PNG, JPG, GIF · ไม่เกิน 2 MB · ระบบย่อรูปให้อัตโนมัติ</span></div></div></div>' +
       '<div class="grid">' +
         '<div class="field"><label for="c-type">ส่วนลด</label><select id="c-type" name="type"' + lockAttr + '><option value="baht"' + (style === 'baht' ? ' selected' : '') + '>ลดเป็นบาท</option><option value="pct"' + (style === 'pct' ? ' selected' : '') + '>ลดเป็น %</option><option value="free"' + (style === 'free' ? ' selected' : '') + '>ของฟรี</option></select></div>' +
-        '<div class="field"><label for="c-val" id="c-val-l">มูลค่า</label><input id="c-val" name="value" type="number" min="1" step="0.01" required value="' + esc(Number(x.discount_value) || '') + '"' + lockAttr + '></div>' +
+        '<div class="field" data-show="val"><label for="c-val" id="c-val-l">มูลค่า</label><input id="c-val" name="value" type="number" min="1" step="0.01" required value="' + esc(Number(x.discount_value) || '') + '"' + lockAttr + '></div>' +
         '<div class="field" data-show="pct"><label for="c-max">ลดสูงสุด (บาท)</label><input id="c-max" name="maxDiscount" type="number" min="0" placeholder="ไม่จำกัด" value="' + esc(x.max_discount ? Number(x.max_discount) : '') + '"' + lockAttr + '></div>' +
         '<div class="field"><label for="c-min">ยอดซื้อขั้นต่ำ (บาท)</label><input id="c-min" name="min" type="number" min="0" value="' + esc(Number(x.min_spend) || 0) + '"' + lockAttr + '></div>' +
         '<div class="field" data-show="code"><label for="c-code">โค้ดที่ลูกค้ากรอก</label><input id="c-code" name="code" maxlength="20" autocapitalize="characters" placeholder="เช่น HUMLAI50" value="' + esc(x.code || '') + '"' + lockAttr + '></div>' +
       '</div>' +
+      itemSections(locked) +
       '<fieldset class="field" data-show="welcome"><legend>ให้กับสมาชิกที่สมัครที่สาขา</legend><div class="row-in">' + radio('wscope', 'all', x.branch_ids ? 'some' : 'all', 'ทุกสาขา') + radio('wscope', 'some', x.branch_ids ? 'some' : 'all', 'เฉพาะสาขาที่เลือก') + '</div>' +
         '<div class="row-in" data-show="wbr">' + brand().branches.map((br) => '<label class="check"><input type="checkbox" name="wb" value="' + esc(br.id) + '"' + ((x.branch_ids || []).includes(br.id) ? ' checked' : '') + '>' + esc(br.name) + '</label>').join('') + '</div>' +
         '<span class="hint">ใช้สาขาที่สมัครที่ลูกค้าเลือกในหน้าสมัคร · ตั้งคูปองต้อนรับหลายใบให้แต่ละสาขาต่างกันได้</span></fieldset>' +
@@ -383,13 +416,16 @@
       tiers: [...el.querySelectorAll('input[name="tiers"]:checked')].map((x) => x.value), followersOnly: v('followersOnly') === '1', useDays: mask,
       autoSend: v('kind') === 'gift' && v('autoSend') === '1', schedKind: v('schedKind'), schedDay: v('schedKind') === 'weekly' ? v('schedDayW') : v('schedDayM'), schedDate: v('schedDate'), schedTime: v('schedTime'),
       roundLimit: v('rlim') === '1' ? v('roundLimit') : '', roundPick: v('roundPick'), perMember: v('perMember'), notifyLine: v('notifyLine'),
+      freeItems: v('type') === 'free' ? S.edit.free : [], condMode: v('condMode'), condItems: v('condMode') ? S.edit.cond.items : [], condQty: v('condQty'), condScope: v('condScope'),
       branchIds: v('kind') === 'welcome' && v('wscope') === 'some' ? [...el.querySelectorAll('input[name="wb"]:checked')].map((x) => x.value) : null, maxIssue: v('limit') === '1' ? v('maxIssue') : '', active: v('active') };
   }
   function syncCoupon(el) {
     const b = couponBody(el);
     const show = { pct: b.type === 'pct', code: b.kind === 'code', welcome: b.kind === 'welcome', wbr: b.kind === 'welcome' && el.elements.wscope && el.elements.wscope.value === 'some', dates: b.validity === 'dates', days: b.validity !== 'dates', limit: el.elements.limit && el.elements.limit.value === '1',
       gift: b.kind === 'gift', auto: b.autoSend, sm: b.schedKind === 'monthly', sw: b.schedKind === 'weekly', so: b.schedKind === 'once', rlim: el.elements.rlim && el.elements.rlim.value === '1',
-      aud: b.kind === 'general' || b.kind === 'birthday' || b.autoSend };
+      aud: b.kind === 'general' || b.kind === 'birthday' || b.autoSend,
+      free: b.type === 'free', val: !(b.type === 'free' && S.edit.free.length), cond: !!b.condMode, notfree: b.type !== 'free' };
+    if (el.elements.value) { el.elements.value.required = show.val; el.elements.value.disabled = !show.val || !!S.edit.locked; }
     el.querySelectorAll('[data-show]').forEach((x) => { x.hidden = !show[x.dataset.show]; });
     const k = KINDS.find((x) => x[0] === b.kind); document.getElementById('kind-hint').textContent = k ? k[2] : '';
     if (b.autoSend) previewRound(b);
@@ -404,6 +440,8 @@
       (b.kind === 'welcome' ? '<div class="prev-sec"><b>ได้เมื่อ</b>' + row('สมัครที่สาขา', b.branchIds ? (b.branchIds.length ? b.branchIds.map(branchLabel).join(', ') : 'ยังไม่ได้เลือก') : 'ทุกสาขา') + '</div>' : '') +
       '<div class="prev-sec"><b>เงื่อนไข</b>' + row('ขั้นต่ำ', Number(b.min) ? fmt(b.min) + ' บาท' : 'ไม่มี') + (b.type === 'pct' && Number(b.maxDiscount) ? row('ลดสูงสุด', fmt(b.maxDiscount) + ' บาท') : '') + row('ใช้ได้เมื่อ', daysText(b.useDays || 0) || '-') +
         ((b.kind === 'general' || b.kind === 'birthday' || b.autoSend) && b.tiers.length < TIER_KEYS.length ? row('ระดับ', tiersText(b.tiers)) : '') +
+        (b.type === 'free' && S.edit.free.length ? row('ได้ฟรี', S.edit.free.map((x) => x.name).join(' หรือ ') + ' 1 ชิ้น') : '') +
+        (b.condMode && S.edit.cond.items.length ? row('ต้องมีในบิล', S.edit.cond.items.map((x) => (x.type === 'cat' ? 'หมวด' : '') + x.name).join(b.condMode === 'all' ? ' และ ' : ' หรือ ') + (Number(b.condQty) > 1 ? ' รวม ' + b.condQty + ' ชิ้น' : '')) : '') +
         (b.autoSend ? row('รับได้', (Number(b.perMember) || 1) + ' ใบ ' + schedText({ kind: b.schedKind, day: Number(b.schedDay), date: b.schedDate, time: b.schedTime }).replace(/ เวลา .*/, '')) : '') +
         row('จำกัด', b.maxIssue ? fmt(b.maxIssue) + ' ใบ' : 'ไม่จำกัด') + '</div>';
   }
@@ -817,6 +855,18 @@
 
   /* ---------- การกด ---------- */
   const A = {
+    pickAdd: (v) => {
+      const [kind, type, ...rest] = v.split(':'); const id = rest.join(':'); const e = S.edit; const menu = e.menu;
+      const src = type === 'cat' ? menu.categories.find((x) => x.id === id) : menu.items.find((x) => x.id === id); if (!src) return;
+      if (kind === 'free') e.free.push({ id: src.id, name: src.name, price: src.price });
+      else e.cond.items.push({ type, id: src.id, name: src.name });
+      const q = document.querySelector('.mp-q[data-pick="' + kind + '"]'); if (q) { q.value = ''; q.focus(); }
+      drawPick(kind); const f = document.querySelector('form[data-f="coupon"]'); if (f) syncCoupon(f);
+    },
+    pickDel: (v) => {
+      const [kind, i] = v.split(':'); const list = kind === 'free' ? S.edit.free : S.edit.cond.items; list.splice(Number(i), 1);
+      drawPick(kind); const f = document.querySelector('form[data-f="coupon"]'); if (f) syncCoupon(f);
+    },
     rmLayout: (v) => {
       const r = S.rm; if (r.layout === v) return;
       const n = S.data.rm.layouts[v].areas.length;
@@ -879,9 +929,11 @@
     cfilter: (v) => { S.cfilter = v; render(); },
     editCoupon: async (v) => {
       const t = v ? S.data.coupons.find((x) => String(x.id) === String(v)) : null;
-      const rounds = t && t.kind === 'gift' ? await api('GET', '/api/admin/coupon-templates/' + t.id + '/rounds') : [];
+      const [rounds, menu] = await Promise.all([t && t.kind === 'gift' ? api('GET', '/api/admin/coupon-templates/' + t.id + '/rounds') : [], api('GET', '/api/admin/pos-menu?brand=' + S.brand)]);
       roundKey = '';
-      S.edit = { kind: 'coupon', id: v || null, imageId: t ? t.image_id : null, imageUrl: t && t.image_id ? '/api/public/coupon-images/' + t.image_id : null, rounds }; S.err = ''; render();
+      S.edit = { kind: 'coupon', id: v || null, imageId: t ? t.image_id : null, imageUrl: t && t.image_id ? '/api/public/coupon-images/' + t.image_id : null, rounds, menu, locked: !!(t && t.issued > 0),
+        free: (t && t.free_items) || [], cond: { mode: (t && t.cond_mode) || '', items: (t && t.cond_items) || [], qty: (t && t.cond_qty) || 1, scope: (t && t.cond_scope) || 'bill' } };
+      S.err = ''; render(); drawPick('free'); drawPick('cond');
     },
     toggleCoupon: async (v) => {
       const t = S.data.coupons.find((x) => String(x.id) === String(v));
@@ -1034,7 +1086,10 @@
     if (el.dataset.f === 'login' || el.dataset.f === 'password') { fn(form(el)); return; }
     guard(() => fn(form(el), el.dataset.v, el), true);
   });
-  document.addEventListener('input', (e) => { const f = e.target.closest && e.target.closest('form[data-f="coupon"]'); if (f) syncCoupon(f); });
+  document.addEventListener('input', (e) => {
+    if (e.target.classList && e.target.classList.contains('mp-q')) { drawPick(e.target.dataset.pick); return; }
+    const f = e.target.closest && e.target.closest('form[data-f="coupon"]'); if (f) syncCoupon(f);
+  });
   document.addEventListener('change', (e) => {
     const ms = e.target.closest && e.target.closest('form[data-f="msearch"]');
     if (ms && e.target.tagName === 'SELECT') ms.requestSubmit();
@@ -1091,6 +1146,12 @@
     if (e.target.id !== 'rm-file' || !e.target.files[0]) return;
     try { S.rm.img = await rmPrepare(e.target.files[0], rmLay()); S.rm.err = ''; } catch (err) { S.rm.img = null; S.rm.err = err.message; }
     e.target.value = ''; render();
+  });
+  // Enter ในช่องค้นหาเมนู = เลือกรายการแรก (ไม่ส่งฟอร์ม)
+  document.addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter' || !e.target.classList || !e.target.classList.contains('mp-q')) return;
+    e.preventDefault();
+    const first = document.querySelector('#pick-' + e.target.dataset.pick + '-list [data-a="pickAdd"]'); if (first) first.click();
   });
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && S.edit) A.close(); });
 

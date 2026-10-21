@@ -70,7 +70,8 @@ function templateFields(b) {
   const title = String(b.title || '').trim();
   if (!title) throw bad('title_required', 'ใส่ชื่อคูปอง');
   const style = ['baht', 'pct', 'free'].includes(b.type) ? b.type : 'baht';
-  const value = Number(b.value);
+  const items = itemRules(style, b);
+  const value = items.free ? Math.max(...items.free.map((x) => x.price)) || 1 : Number(b.value);
   if (!(value > 0) || (style === 'pct' && value > 100)) throw bad('value_invalid', style === 'free' ? 'ใส่ราคาของที่แจกฟรี (ใช้เป็นส่วนลดตอนปิดบิล)' : 'ใส่มูลค่าส่วนลดให้ถูกต้อง');
   const min = Math.max(0, Number(b.min) || 0);
   const maxDiscount = style === 'pct' && Number(b.maxDiscount) > 0 ? Number(b.maxDiscount) : null;
@@ -97,11 +98,23 @@ function templateFields(b) {
   // ป้ายบนคูปอง + เงื่อนไขย่อ (สร้างจากการตั้งค่า ลูกค้าเห็นตรงกับที่ระบบตรวจจริง)
   const big = style === 'free' ? 'ฟรี' : style === 'pct' ? '-' + value + '%' : '-' + value;
   const small = style === 'free' ? KIND_NAMES[kind] : style === 'pct' ? 'ส่วนลด' : 'บาท';
-  const cond = [min ? 'ขั้นต่ำ ' + min + ' บาท' : '', maxDiscount ? 'ลดสูงสุด ' + maxDiscount + ' บาท' : '',
+  const cond = [items.free ? 'ฟรี ' + items.free.map((x) => x.name).join(' หรือ ') + ' 1 ชิ้น (ต้องมีในบิล)' : '',
+    items.condMode ? 'ต้องมี ' + items.condItems.map((x) => (x.type === 'cat' ? 'หมวด' : '') + x.name).join(items.condMode === 'all' ? ' และ ' : ' หรือ ') + (items.condQty > 1 ? ' รวม ' + items.condQty + ' ชิ้นขึ้นไป' : '') + ' ในบิล' : '',
+    min ? 'ขั้นต่ำ ' + min + ' บาท' : '', maxDiscount ? 'ลดสูงสุด ' + maxDiscount + ' บาท' : '',
     useDays === 127 ? '' : 'ใช้ได้วัน ' + DAY_SHORT.filter((_, i) => useDays & (1 << i)).join(' '), '1 ใบใช้ได้ 1 ครั้ง'].filter(Boolean).join(' · ');
   return { kind, title, description: String(b.description || '').trim().slice(0, 1000), imageId: b.imageId ? parseInt(b.imageId, 10) : null, type: style === 'pct' ? 'pct' : 'baht',
-    value, min, maxDiscount, big, small, cond, validity, validFrom, validTo, days, issueFrom, issueTo, tier: 'all', tiers, sched, followersOnly: !!b.followersOnly, useDays,
+    value, min, maxDiscount, big, small, cond, validity, validFrom, validTo, days, issueFrom, issueTo, tier: 'all', tiers, sched, items, followersOnly: !!b.followersOnly, useDays,
     maxIssue: optInt(b.maxIssue) || null, code, active: b.active !== false, branchIds };
+}
+// ของฟรีเลือกจากเมนู POS + เงื่อนไขสินค้าในบิล
+function itemRules(style, b) {
+  const clean = (list, withType) => (Array.isArray(list) ? list : []).slice(0, 30).map((x) => ({ ...(withType ? { type: x.type === 'cat' ? 'cat' : 'item' } : {}),
+    id: String(x.id || '').slice(0, 100), name: String(x.name || '').trim().slice(0, 200), ...(withType ? {} : { price: Math.max(0, Number(x.price) || 0) }) })).filter((x) => x.id && x.name);
+  const free = style === 'free' ? clean(b.freeItems, false) : [];
+  const condItems = ['any', 'all'].includes(b.condMode) ? clean(b.condItems, true) : [];
+  if (['any', 'all'].includes(b.condMode) && !condItems.length) throw bad('cond_required', 'เลือกเมนูหรือหมวดที่ต้องมีในบิลอย่างน้อย 1 รายการ (หรือเลือก "ไม่มีเงื่อนไข")');
+  const condQty = Math.min(99, Math.max(1, parseInt(b.condQty, 10) || 1));
+  return { free: free.length ? free : null, condMode: condItems.length ? b.condMode : null, condItems: condItems.length ? condItems : null, condQty, condScope: b.condScope === 'items' && condItems.length ? 'items' : 'bill' };
 }
 // ของขวัญส่งอัตโนมัติตามรอบ (เฉพาะประเภทของขวัญ)
 function schedFields(kind, b) {
@@ -127,8 +140,10 @@ async function saveAudience(db, id, f) {
   const x = f.sched;
   await db.q(`UPDATE coupon_templates SET audience_tiers = $2,
       sched_since = CASE WHEN $3 AND (NOT auto_send OR sched_since IS NULL OR sched_kind IS DISTINCT FROM $4 OR sched_day IS DISTINCT FROM $5 OR sched_date IS DISTINCT FROM $6::date OR sched_time IS DISTINCT FROM $7::time) THEN now() ELSE sched_since END,
-      auto_send = $3, sched_kind = $4, sched_day = $5, sched_date = $6::date, sched_time = $7::time, round_limit = $8, round_pick = $9, per_member = $10, notify_line = $11 WHERE id = $1`,
-    [id, f.tiers, x.auto, x.kind, x.day, x.date, x.time, x.limit, x.pick, x.perMember, x.notify]);
+      auto_send = $3, sched_kind = $4, sched_day = $5, sched_date = $6::date, sched_time = $7::time, round_limit = $8, round_pick = $9, per_member = $10, notify_line = $11,
+      free_items = $12, cond_mode = $13, cond_items = $14, cond_qty = $15, cond_scope = $16 WHERE id = $1`,
+    [id, f.tiers, x.auto, x.kind, x.day, x.date, x.time, x.limit, x.pick, x.perMember, x.notify,
+      f.items.free ? JSON.stringify(f.items.free) : null, f.items.condMode, f.items.condItems ? JSON.stringify(f.items.condItems) : null, f.items.condQty, f.items.condScope]);
 }
 const hhmm = (v) => { const x = String(v || '').trim(); if (!x) return null; if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(x.slice(0, 5))) throw bad('time_invalid', 'เวลาไม่ถูกต้อง'); return x.slice(0, 5); };
 function branchFields(b) {
@@ -606,6 +621,15 @@ export default function (r) {
     const rows = await q(TPL_SQL + ` WHERE t.kind <> 'internal' AND (t.brand_id = ANY($1) OR (t.brand_id IS NULL AND $2)) ORDER BY t.is_active DESC, t.id DESC`, [bs, s.role === 'super']);
     return rows.map((t) => ({ ...t, next_round: t.auto_send ? (nextRound(t) || {}).at || null : null }));
   });
+  // เมนูที่ POS ซิงก์มา (เลือกของฟรี/เงื่อนไขสินค้าในหน้าคูปอง)
+  r.get('/api/admin/pos-menu', async (req, _b, url) => {
+    const s = await staffUser(req); requirePage(s, 'rewards');
+    const brandId = url.searchParams.get('brand'); requireBrand(s, brandId);
+    const b = await one('SELECT menu_synced_at FROM brands WHERE id = $1', [brandId]);
+    const items = await q('SELECT item_id AS id, name, category, category_name, price::float AS price FROM pos_menu_items WHERE brand_id = $1 AND is_active ORDER BY category_name NULLS LAST, name', [brandId]);
+    const cats = new Map(); for (const i of items) if (i.category && !cats.has(i.category)) cats.set(i.category, i.category_name || i.category);
+    return { syncedAt: b ? b.menu_synced_at : null, items, categories: [...cats].map(([id, name]) => ({ id, name })) };
+  });
   // ของขวัญส่งอัตโนมัติ: ตอนนี้ตรงเงื่อนไขกี่คน + รอบถัดไป (ใช้ในฟอร์มก่อนบันทึก)
   r.post('/api/admin/coupon-rounds/preview', async (req, b) => {
     const s = await staffUser(req); requirePage(s, 'rewards'); requireBrand(s, b.brand);
@@ -652,7 +676,8 @@ export default function (r) {
     const f = onlyToggle ? null : templateFields(b);
     if (f && old.issued > 0) {
       // แจกไปแล้ว: ห้ามเปลี่ยนมูลค่า/เงื่อนไขที่ลูกค้าถืออยู่ ให้ปิดใบนี้แล้วสร้างใหม่แทน
-      const same = f.kind === old.kind && f.type === old.discount_type && f.value === Number(old.discount_value) && f.min === Number(old.min_spend) && (f.maxDiscount ?? null) === (old.max_discount === null ? null : Number(old.max_discount)) && f.big === old.badge_big;
+      const same = f.kind === old.kind && f.type === old.discount_type && f.value === Number(old.discount_value) && f.min === Number(old.min_spend) && (f.maxDiscount ?? null) === (old.max_discount === null ? null : Number(old.max_discount)) && f.big === old.badge_big
+        && JSON.stringify((f.items.free || []).map((x) => x.id)) === JSON.stringify((old.free_items || []).map((x) => x.id));
       if (!same) throw bad('coupon_locked', 'คูปองนี้แจกไปแล้ว ' + old.issued + ' ใบ เปลี่ยนประเภทหรือมูลค่าส่วนลดไม่ได้ ให้ปิดใบนี้แล้วสร้างใหม่');
       if ((f.code || null) !== (old.code || null)) throw bad('coupon_locked', 'คูปองนี้แจกไปแล้ว เปลี่ยนโค้ดไม่ได้');
       if (f.maxIssue && f.maxIssue < old.issued) throw bad('max_issue_low', 'จำนวนจำกัดต้องไม่น้อยกว่าที่แจกไปแล้ว (' + old.issued + ' ใบ)');
