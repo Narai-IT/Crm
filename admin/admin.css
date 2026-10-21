@@ -279,3 +279,13 @@ details.adv[open] > *:not(summary) { margin-bottom: 12px; }
 @media (max-width: 1000px) { .rm { grid-template-columns: 1fr; } .rm-side { position: static; } }
 @media (max-width: 640px) { .rm-act { grid-template-columns: 30px minmax(0, 1fr); } .rm-act > :last-child { grid-column: 2; } .rm-h { grid-template-columns: 80px minmax(0, 1fr); } .rm-h img { width: 80px; } .rm-h .btn { grid-column: 1 / -1; } }
 .rm-live { max-width: 720px; } .rm-live .rm-z { cursor: default; }
+
+/* คูปองของขวัญส่งอัตโนมัติ + ระดับ Diamond */
+.tierp.DIAMOND { background: #E3F4FA; color: #0E5A73; }
+.gift-sec { border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px; gap: 10px; }
+.gift-auto { display: flex; flex-direction: column; gap: 10px; }
+.gift-sec select, .gift-sec input[type="time"], .gift-sec input[type="number"], .gift-sec input[type="date"], fieldset[data-show="aud"] select { min-height: 40px; border: 1px solid var(--line); border-radius: 10px; padding: 6px 10px; background: #fff; }
+.round-box { background: #F4FBF6; border: 1px dashed #4CAF7A; border-radius: 10px; padding: 8px 12px; font-size: 14px; }
+.rounds summary { cursor: pointer; font-weight: 600; color: var(--ai); }
+.rounds .tbl { margin-top: 6px; font-size: 13px; }
+.check.tierc { border: 1px solid var(--line); border-radius: 999px; padding: 4px 12px; }

@@ -78,6 +78,7 @@ server/
     services/core.js           แต้ม (atomic + idempotent), คูปอง, สมัคร/OTP, ขาย/คืนเงิน, ปรับแต้ม
     services/line.js           ตรวจลายเซ็น webhook, ตอบ Rich Menu, สร้าง Flex, ส่งผ่าน outbox
     services/richmenu.js       ริชเมนู LINE: แบบช่อง, ตรวจรูป, ติดตั้งผ่าน Messaging API (หน้าหลังบ้าน "ริชเมนู LINE")
+    services/rounds.js         คูปองของขวัญส่งอัตโนมัติตามรอบ (worker ตรวจทุกนาที · 1 รอบส่งครั้งเดียว)
     routes/                    liff · pos · admin · webhook · dev
     worker.js                  ส่งข้อความหลัง commit, แต้ม/คูปองหมดอายุ
   test/api.test.js             ทดสอบ flow หลัก 15 กรณี

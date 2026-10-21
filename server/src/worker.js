@@ -1,7 +1,8 @@
 // งานเบื้องหลัง: ส่งข้อความจาก outbox (หลัง commit เท่านั้น) · แต้ม/คูปองหมดอายุ
-import { pool, tx } from './db.js';
+import { pool, q, tx } from './db.js';
 import { deliver } from './services/line.js';
 import { expireLots, expireCoupons } from './services/core.js';
+import { runDueRounds } from './services/rounds.js';
 import { logApi } from './apilog.js';
 import { DEV } from './util.js';
 
@@ -38,10 +39,25 @@ export async function housekeeping() {
   await tx(async (db) => { await expireLots(db); await expireCoupons(db); });
 }
 
+// คูปองของขวัญที่ถึงรอบส่ง (ตรวจทุกนาที)
+let roundsBusy = false;
+export async function giftRounds() {
+  if (roundsBusy) return [];
+  roundsBusy = true;
+  try {
+    const done = await runDueRounds({ q, tx });
+    for (const r of done) console.log('ส่งคูปองของขวัญ #' + r.templateId + ' รอบ ' + r.key + ': ' + r.members + ' คน ' + r.issued + ' ใบ');
+    if (done.length) drainOutbox().catch(() => {});
+    return done;
+  } finally { roundsBusy = false; }
+}
+
 export function startWorker() {
   const t1 = setInterval(() => drainOutbox().catch((e) => console.error('outbox', e.message)), 1500);
   const t2 = setInterval(() => housekeeping().catch((e) => console.error('housekeeping', e.message)), 3600 * 1000);
+  const t3 = setInterval(() => giftRounds().catch((e) => console.error('gift rounds', e.message)), 60 * 1000);
   housekeeping().catch(() => {});
-  return () => { clearInterval(t1); clearInterval(t2); };
+  giftRounds().catch(() => {});
+  return () => { clearInterval(t1); clearInterval(t2); clearInterval(t3); };
 }
 export { pool };

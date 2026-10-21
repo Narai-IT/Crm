@@ -5,6 +5,9 @@ import { conflict, bad, notFound, HttpError } from '../http.js';
 import { calcPoints, couponDiscount, memberIdOf, randomCode, sha256, DEV, REQUIRE_OTP, tierOf, checkMemberPin } from '../util.js';
 import { queueMessage } from './line.js';
 
+// สมาชิกของแบรนด์: สมัครกับแบรนด์ / ผูกกับแบรนด์ / เคยมีแต้มที่แบรนด์ ($1 = แบรนด์)
+export const MEMBER_SCOPE = `(m.joined_brand_id = $1 OR EXISTS (SELECT 1 FROM member_brand_links k WHERE k.member_id = m.id AND k.brand_id = $1)
+  OR EXISTS (SELECT 1 FROM point_ledger l WHERE l.member_id = m.id AND l.brand_id = $1))`;
 export const currentRule = (db, brandId) => db.one('SELECT * FROM earn_rules WHERE brand_id = $1 AND effective_to IS NULL', [brandId]);
 
 export async function audit(db, actor, action, entity, detail, before, after) {
@@ -128,7 +131,7 @@ export async function issueCoupon(db, { memberId, templateId, source, sourceRef 
 }
 
 // คูปองที่อยู่ในช่วงแจก (ยังไม่หมดเขตใช้) ของแบรนด์
-const OPEN_TPL = `t.is_active AND (t.issue_from IS NULL OR t.issue_from <= now()) AND (t.issue_to IS NULL OR t.issue_to >= now())
+export const OPEN_TPL = `t.is_active AND (t.issue_from IS NULL OR t.issue_from <= now()) AND (t.issue_to IS NULL OR t.issue_to >= now())
   AND (t.valid_to IS NULL OR t.valid_to > now())`;
 
 // แจกคูปองอัตโนมัติ (ประเภททั่วไป/วันเกิด) ให้สมาชิกที่ตรงเงื่อนไข · เรียกตอนลูกค้าเปิดหน้าสมาชิก และตอน POS สแกน
@@ -147,9 +150,9 @@ export async function autoIssue(db, memberId, brandId) {
   for (const t of tpls) {
     if (t.followers_only && m.follow !== 'follow') continue;
     if (t.kind === 'birthday' && (!m.birth_date || m.bmonth !== m.nmonth)) continue;
-    if (t.audience_tier !== 'all') {
+    if (t.audience_tiers && t.audience_tiers.length) {
       if (!tier) tier = (await walletsOf(db, memberId))[brandId].tier.name;
-      if (tier !== t.audience_tier) continue;
+      if (!t.audience_tiers.includes(tier)) continue;
     }
     try {
       out.push(await issueCoupon(db, { memberId, templateId: t.id, source: t.kind === 'birthday' ? 'birthday' : 'auto', sourceRef: t.kind === 'birthday' ? t.id + ':' + m.nyear : String(t.id) }));
@@ -278,7 +281,7 @@ export async function setConsent(db, memberId, brandId, marketing) {
 
 /* ---------------- แลกแต้ม ---------------- */
 /* ---------------- ของรางวัล ---------------- */
-const TIER_NAMES = { SILVER: 'Silver', GOLD: 'Gold', PLATINUM: 'Platinum' };
+const TIER_NAMES = { SILVER: 'Silver', GOLD: 'Gold', PLATINUM: 'Platinum', DIAMOND: 'Diamond' };
 const PERIOD_NAMES = { day: 'วันนี้', week: 'สัปดาห์นี้', month: 'เดือนนี้', year: 'ปีนี้', all: '' };
 // ของรางวัลที่อยู่ในช่วงวันที่เปิดแลก (เวลาไทย) · คูปองที่ผูกไว้ต้องยังเปิดแจกอยู่
 const REWARD_SQL = `SELECT r.*, to_char(r.end_date, 'YYYY-MM-DD') AS end_day, t.discount_type, t.discount_value, t.min_spend, t.badge_big, t.valid_days, t.title AS coupon_title,
