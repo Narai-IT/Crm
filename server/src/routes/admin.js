@@ -5,9 +5,23 @@ import { staffUser, loadStaff, requirePage, requireBrand, scopeBrands, ROLE_PAGE
 import { checkPassword, hashPassword, signToken, maskPhone } from '../util.js';
 import * as core from '../services/core.js';
 import { queueMessage } from '../services/line.js';
+import * as rm from '../services/richmenu.js';
 import { COUPON_SQL, couponView } from './liff.js';
 
 const actor = (s) => ({ type: 'staff', id: s.id, name: s.name });
+const RM_COLS = 'id, brand_id, layout, actions, chat_bar, width, height, octet_length(data)::int AS size, is_active, created_by, created_at, installed_at';
+const rmBusy = new Set();                                  // กันกดติดตั้งซ้อนกันในแบรนด์เดียว
+// ติดตั้งเมนูให้ OA แล้วบันทึกว่าเมนูไหนใช้อยู่ · LINE ทำก่อน ถ้า LINE ไม่รับ ฐานข้อมูลไม่เปลี่ยน
+async function installRichMenu(brandId, m, image, mime) {
+  if (rmBusy.has(brandId)) throw conflict('richmenu_busy', 'กำลังติดตั้งเมนูของแบรนด์นี้อยู่ รอสักครู่');
+  rmBusy.add(brandId);
+  try {
+    return await rm.install({ brandId, token: process.env['LINE_' + brandId.toUpperCase() + '_TOKEN'], liffId: process.env.LIFF_ID, ...m, image, mime });
+  } catch (e) {
+    if (e.code === 'richmenu_invalid' || e.code === 'line_error') throw bad(e.code, e.message);
+    throw e;
+  } finally { rmBusy.delete(brandId); }
+}
 
 
 function checkNewPassword(pw, id) {
@@ -845,6 +859,56 @@ export default function (r) {
   r.get('/api/admin/audit-logs', async (req) => {
     const s = await staffUser(req); requirePage(s, 'audit');
     return q('SELECT * FROM audit_logs ORDER BY id DESC LIMIT 300');
+  });
+  // ริชเมนู LINE: ประวัติเมนูของแบรนด์ + แบบช่อง/ปุ่มที่เลือกได้
+  r.get('/api/admin/richmenus', async (req, _b, url) => {
+    const s = await staffUser(req); requirePage(s, 'line');
+    const brandId = url.searchParams.get('brand'); requireBrand(s, brandId);
+    const b = await one('SELECT oa_basic_id FROM brands WHERE id = $1', [brandId]);
+    if (!b) throw notFound('ไม่พบแบรนด์');
+    const list = await q('SELECT ' + RM_COLS + ' FROM rich_menus WHERE brand_id = $1 ORDER BY is_active DESC, installed_at DESC LIMIT 20', [brandId]);
+    return { oa: b.oa_basic_id, configured: !!process.env['LINE_' + brandId.toUpperCase() + '_TOKEN'] && !!process.env.LIFF_ID,
+      layouts: rm.LAYOUTS, actions: rm.ACTIONS, defaults: rm.DEFAULT_ACTIONS, list: list.map((x) => ({ ...x, image: '/api/public/richmenu-images/' + x.id })) };
+  });
+  // ติดตั้งเมนูใหม่: รูปใหม่ (dataUrl) หรือใช้รูปของเมนูเดิม (fromId) แล้วเปลี่ยนแค่ปุ่ม
+  r.post('/api/admin/richmenus', async (req, b) => {
+    const s = await staffUser(req); requirePage(s, 'line'); requireBrand(s, b.brand);
+    const m = (() => { try { return rm.checkMenu(b); } catch (e) { throw bad(e.code, e.message); } })();
+    let image;
+    if (b.fromId) {
+      const src = await one('SELECT data FROM rich_menus WHERE id = $1 AND brand_id = $2', [parseInt(b.fromId, 10), b.brand]);
+      if (!src) throw notFound('ไม่พบรูปของเมนูเดิม');
+      image = Buffer.isBuffer(src.data) ? src.data : Buffer.from(String(src.data).replace(/^\\x/, ''), 'hex');
+    } else {
+      const d = /^data:image\/(?:png|jpeg);base64,([A-Za-z0-9+/=]+)$/.exec(String(b.dataUrl || ''));
+      if (!d) throw bad('richmenu_invalid', 'อัปโหลดรูปเมนู (JPG หรือ PNG)');
+      image = Buffer.from(d[1], 'base64');
+    }
+    const info = (() => { try { return rm.checkImage(image, m.layout); } catch (e) { throw bad(e.code, e.message); } })();
+    const res = await installRichMenu(b.brand, m, image, info.mime);
+    return tx(async (db) => {
+      await db.q('UPDATE rich_menus SET is_active = false, line_menu_id = null WHERE brand_id = $1 AND is_active', [b.brand]);
+      const row = await db.one(`INSERT INTO rich_menus (brand_id, layout, actions, chat_bar, mime, width, height, data, line_menu_id, is_active, created_by)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,true,$10) RETURNING ` + RM_COLS, [b.brand, m.layout, JSON.stringify(m.actions), m.chatBar, info.mime, info.width, info.height, image, res.richMenuId, s.id]);
+      await core.audit(db, actor(s), 'install_richmenu', { type: 'brand', id: b.brand }, 'ติดตั้งริชเมนู ' + rm.LAYOUTS[m.layout].name + ' (#' + row.id + ')', null, { id: row.id, layout: m.layout, actions: m.actions, chatBar: m.chatBar });
+      return row;
+    });
+  });
+  // ย้อนกลับไปใช้เมนูเดิม: ติดตั้งรูปและปุ่มของเมนูนั้นให้ OA อีกครั้ง
+  r.post('/api/admin/richmenus/:id/restore', async (req, _b, _u, p) => {
+    const s = await staffUser(req); requirePage(s, 'line');
+    const old = await one('SELECT * FROM rich_menus WHERE id = $1', [parseInt(p.id, 10)]);
+    if (!old) throw notFound('ไม่พบเมนูนี้');
+    requireBrand(s, old.brand_id);
+    if (old.is_active) throw conflict('richmenu_active', 'เมนูนี้ใช้อยู่แล้ว');
+    const image = Buffer.isBuffer(old.data) ? old.data : Buffer.from(String(old.data).replace(/^\\x/, ''), 'hex');
+    const res = await installRichMenu(old.brand_id, { layout: old.layout, actions: old.actions, chatBar: old.chat_bar }, image, old.mime);
+    return tx(async (db) => {
+      await db.q('UPDATE rich_menus SET is_active = false, line_menu_id = null WHERE brand_id = $1 AND is_active', [old.brand_id]);
+      const row = await db.one('UPDATE rich_menus SET is_active = true, line_menu_id = $2, installed_at = now() WHERE id = $1 RETURNING ' + RM_COLS, [old.id, res.richMenuId]);
+      await core.audit(db, actor(s), 'restore_richmenu', { type: 'brand', id: old.brand_id }, 'ย้อนกลับไปใช้ริชเมนู #' + old.id, null, { id: old.id });
+      return row;
+    });
   });
   r.get('/api/admin/line-channels', async (req) => {
     const s = await staffUser(req); requirePage(s, 'line');

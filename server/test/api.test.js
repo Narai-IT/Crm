@@ -644,3 +644,43 @@ t('ต้องเพิ่มเพื่อน OA ก่อนสมัคร:
     assert.equal(ok.status, 200, JSON.stringify(ok.data));
   } finally { globalThis.fetch = realFetch; delete process.env.LINE_HUMLAI_TOKEN; }
 });
+
+t('ริชเมนู: ตรวจขนาดรูป ติดตั้งผ่าน LINE และย้อนกลับเมนูเดิม', async () => {
+  const adm = { 'x-dev-staff': 'S002' };
+  const png = (w, h) => { const b = Buffer.alloc(64); Buffer.from('89504e470d0a1a0a0000000d49484452', 'hex').copy(b); b.writeUInt32BE(w, 16); b.writeUInt32BE(h, 20); return 'data:image/png;base64,' + b.toString('base64'); };
+  const realFetch = globalThis.fetch; const calls = []; let n = 0;
+  globalThis.fetch = (url, opt = {}) => {
+    const u = String(url);
+    if (!u.includes('/v2/bot/richmenu') && !u.includes('/v2/bot/user/all/richmenu')) return u.includes('line.me') ? Promise.resolve(new Response('{}', { status: 200 })) : realFetch(url, opt);
+    calls.push((opt.method || 'GET') + ' ' + u.replace(/^https:\/\/api(-data)?\.line\.me\/v2\/bot/, ''));
+    const body = u.endsWith('/richmenu/list') ? { richmenus: [{ richMenuId: 'old-1', name: 'crm-humlai' }, { richMenuId: 'other', name: 'manual' }] } : u.endsWith('/v2/bot/richmenu') ? { richMenuId: 'rm-' + (++n) } : {};
+    return Promise.resolve(new Response(JSON.stringify(body), { status: 200 }));
+  };
+  process.env.LINE_HUMLAI_TOKEN = 'test-token'; process.env.LIFF_ID = 'test-liff';
+  const acts = [{ kind: 'card' }, { kind: 'message', value: 'โปรโมชั่น' }, { kind: 'coupons' }, { kind: 'uri', value: 'https://example.com/menu' }];
+  try {
+    const info = await call('GET', '/api/admin/richmenus?brand=humlai', undefined, adm);
+    assert.equal(info.status, 200); assert.equal(info.data.configured, true); assert.equal(info.data.list.length, 0);
+    const wrong = await call('POST', '/api/admin/richmenus', { brand: 'humlai', layout: 'l4', actions: acts, chatBar: 'เมนู', dataUrl: png(1200, 810) }, adm);
+    assert.equal(wrong.status, 400); assert.match(wrong.data.message, /2500 × 1686/);
+    const badUri = await call('POST', '/api/admin/richmenus', { brand: 'humlai', layout: 'l4', actions: [acts[0], acts[1], acts[2], { kind: 'uri', value: 'http://x.com' }], chatBar: 'เมนู', dataUrl: png(2500, 1686) }, adm);
+    assert.equal(badUri.status, 400);
+    assert.equal(calls.length, 0);
+    const a = await call('POST', '/api/admin/richmenus', { brand: 'humlai', layout: 'l4', actions: acts, chatBar: 'เมนูร้าน', dataUrl: png(2500, 1686) }, adm);
+    assert.equal(a.status, 200, JSON.stringify(a.data)); assert.equal(a.data.is_active, true);
+    assert.ok(calls.includes('DELETE /richmenu/old-1') && !calls.includes('DELETE /richmenu/other'));
+    // เปลี่ยนแค่ปุ่ม ใช้รูปเดิม
+    const b = await call('POST', '/api/admin/richmenus', { brand: 'humlai', layout: 'l4', actions: [acts[0], acts[1], acts[2], { kind: 'history' }], chatBar: 'เมนู', fromId: a.data.id }, adm);
+    assert.equal(b.status, 200, JSON.stringify(b.data));
+    let list = (await call('GET', '/api/admin/richmenus?brand=humlai', undefined, adm)).data.list;
+    assert.deepEqual(list.filter((x) => x.is_active).map((x) => x.id), [b.data.id]);
+    const r = await call('POST', '/api/admin/richmenus/' + a.data.id + '/restore', {}, adm);
+    assert.equal(r.status, 200, JSON.stringify(r.data));
+    list = (await call('GET', '/api/admin/richmenus?brand=humlai', undefined, adm)).data.list;
+    assert.equal(list[0].id, a.data.id); assert.equal(list[0].is_active, true); assert.equal(list[0].chat_bar, 'เมนูร้าน');
+    assert.equal((await call('POST', '/api/admin/richmenus/' + a.data.id + '/restore', {}, adm)).status, 409);
+    const img = await realFetch(base_url() + list[0].image);
+    assert.equal(img.status, 200); assert.equal(img.headers.get('content-type'), 'image/png');
+    assert.equal((await call('GET', '/api/admin/richmenus?brand=humlai', undefined, { 'x-dev-staff': 'S005' })).status, 403);
+  } finally { globalThis.fetch = realFetch; delete process.env.LINE_HUMLAI_TOKEN; delete process.env.LIFF_ID; }
+});

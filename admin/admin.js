@@ -11,11 +11,11 @@
   };
   const MENU = [
     ['dash', 'dash', 'ภาพรวม'], ['rewards', 'rewards', 'ของรางวัล'], ['coupons', 'rewards', 'คูปอง'], ['rules', 'rules', 'กฎแต้ม'],
-    ['members', 'members', 'สมาชิก'], ['approvals', 'approvals', 'อนุมัติแต้ม'], ['branches', 'branches', 'สาขา'],
+    ['members', 'members', 'สมาชิก'], ['approvals', 'approvals', 'อนุมัติแต้ม'], ['branches', 'branches', 'สาขา'], ['richmenu', 'line', 'ริชเมนู LINE'],
     ['staff', 'staff', 'ผู้ใช้และสิทธิ์'], ['audit', 'audit', 'ประวัติการแก้ไข']
   ];
   const NO_BRAND = ['staff', 'audit'];
-  const PAGE_NAMES = { dash: 'ภาพรวม', members: 'สมาชิก', approvals: 'อนุมัติแต้ม', rules: 'กฎแต้ม', rewards: 'ของรางวัล/คูปอง', branches: 'สาขา', staff: 'ผู้ใช้และสิทธิ์', audit: 'ประวัติการแก้ไข' };
+  const PAGE_NAMES = { dash: 'ภาพรวม', members: 'สมาชิก', approvals: 'อนุมัติแต้ม', rules: 'กฎแต้ม', rewards: 'ของรางวัล/คูปอง', branches: 'สาขา', line: 'LINE / ริชเมนู', staff: 'ผู้ใช้และสิทธิ์', audit: 'ประวัติการแก้ไข' };
   const CATS = { food: 'อาหาร', side: 'ทานเล่น', drink: 'เครื่องดื่ม', discount: 'ส่วนลด' };
   const DAYS = ['อาทิตย์', 'จันทร์', 'อังคาร', 'พุธ', 'พฤหัสบดี', 'ศุกร์', 'เสาร์'];
   const TH_M = ['ม.ค.', 'ก.พ.', 'มี.ค.', 'เม.ย.', 'พ.ค.', 'มิ.ย.', 'ก.ค.', 'ส.ค.', 'ก.ย.', 'ต.ค.', 'พ.ย.', 'ธ.ค.'];
@@ -118,6 +118,7 @@
     if (S.page === 'branches') d.branches = await api('GET', '/api/admin/branches');
     if (S.page === 'staff') d.staff = await api('GET', '/api/admin/staff');
     if (S.page === 'audit') d.audit = await api('GET', '/api/admin/audit-logs');
+    if (S.page === 'richmenu') { d.rm = await api('GET', '/api/admin/richmenus?brand=' + b); if (!S.rm || S.rm.brand !== b) rmReset(); }
     render();
   }
   async function openMember(id) {
@@ -131,7 +132,7 @@
   function render() {
     const menu = MENU.filter((m) => can(m[1]));
     const title = (MENU.find((m) => m[0] === S.page) || [])[2] || '';
-    const views = { dash: dashView, rewards: rewardsView, coupons: couponsView, rules: rulesView, members: membersView, approvals: approvalsView, branches: branchesView, staff: staffView, audit: auditView };
+    const views = { dash: dashView, rewards: rewardsView, coupons: couponsView, rules: rulesView, members: membersView, approvals: approvalsView, branches: branchesView, staff: staffView, audit: auditView, richmenu: richmenuView };
     $app.innerHTML = '<div class="shell"><nav class="side" aria-label="เมนูหลังบ้าน"><div class="logo">หลังบ้าน CRM</div>' +
       menu.map((m) => '<button data-a="page" data-v="' + m[0] + '"' + (S.page === m[0] ? ' aria-current="page"' : '') + '>' + m[2] + '</button>').join('') +
       '<div class="who">' + esc(S.staff.name) + ' · ' + esc(S.staff.id) + '<br><button data-a="myPassword">เปลี่ยนรหัสผ่าน</button><button data-a="logout">ออกจากระบบ</button></div></nav>' +
@@ -350,6 +351,106 @@
     if (S.edit.imageUrl && !drop) side.querySelector('label').insertAdjacentHTML('afterend', '<button type="button" class="btn ghost sm" data-a="dropImage">ลบรูป</button>');
     if (!S.edit.imageUrl && drop) drop.remove();
     syncCoupon(el);
+  }
+  /* ---------- ริชเมนู LINE: เลือกแบบช่อง → อัปโหลดรูป → ตั้งปุ่ม → ติดตั้ง · ย้อนกลับเมนูเดิมได้ ---------- */
+  const ZL = (i) => String.fromCharCode(65 + i);
+  function rmReset() {
+    const d = S.data.rm; const cur = d.list.find((x) => x.is_active);
+    S.rm = cur ? { brand: S.brand, layout: cur.layout, actions: cur.actions.map((a) => ({ ...a })), chatBar: cur.chat_bar, fromId: cur.id, img: null, sel: 0, err: '' }
+      : { brand: S.brand, layout: 'l4', actions: d.defaults.map((a) => ({ ...a })), chatBar: 'เมนู', fromId: null, img: null, sel: 0, err: '' };
+  }
+  const rmLay = () => S.data.rm.layouts[S.rm.layout];
+  const rmFrom = () => S.data.rm.list.find((x) => x.id === S.rm.fromId);
+  const rmActs = () => S.rm.actions.slice(0, rmLay().areas.length);
+  const rmImgUrl = () => (S.rm.img ? S.rm.img.dataUrl : rmFrom() ? rmFrom().image : null);
+  function rmZones(lay, cls) {
+    return lay.areas.map((a, i) => '<button type="button" class="rm-z' + (cls && S.rm.sel === i ? ' sel' : '') + '" data-a="rmZone" data-v="' + i + '" style="left:' + (a[0] / lay.width * 100) + '%;top:' + (a[1] / lay.height * 100) + '%;width:' + (a[2] / lay.width * 100) + '%;height:' + (a[3] / lay.height * 100) + '%" aria-label="ช่อง ' + ZL(i) + '"><b>' + ZL(i) + '</b>' + (cls ? '<em>' + a[2] + '×' + a[3] + '</em>' : '') + '</button>').join('');
+  }
+  function rmThumb(lay) {
+    return '<span class="rm-g" style="aspect-ratio:' + lay.width + '/' + lay.height + '">' + lay.areas.map((a, i) => '<i style="left:' + (a[0] / lay.width * 100) + '%;top:' + (a[1] / lay.height * 100) + '%;width:' + (a[2] / lay.width * 100) + '%;height:' + (a[3] / lay.height * 100) + '%">' + ZL(i) + '</i>').join('') + '</span>';
+  }
+  function actionLabel(a, acts) { const k = acts[a.kind]; return k ? k.name + (a.value ? ' · ' + a.value : '') : '-'; }
+  function richmenuView() {
+    const d = S.data.rm; const r = S.rm; const lay = rmLay(); const img = rmImgUrl(); const from = rmFrom();
+    const ready = d.configured && img && !r.err;
+    return '<div class="note">' + (d.oa ? 'OA <b>' + esc(d.oa) + '</b> · ' : '') + (d.list.find((x) => x.is_active)
+      ? (() => { const c = d.list.find((x) => x.is_active); return 'เมนูที่ใช้อยู่: ' + esc(d.layouts[c.layout] ? d.layouts[c.layout].name : c.layout) + ' · ติดตั้งเมื่อ ' + date(c.installed_at) + ' ' + new Date(c.installed_at).toTimeString().slice(0, 5) + (c.created_by ? ' โดย ' + esc(c.created_by) : ''); })()
+      : 'ยังไม่เคยติดตั้งเมนูจากหน้านี้ (ถ้ามีเมนูที่ตั้งใน OA Manager เมนูที่ติดตั้งจากหน้านี้จะแสดงแทน)') + '</div>' +
+      (d.configured ? '' : '<div class="err" role="alert">ยังติดตั้งไม่ได้: ต้องตั้ง LINE_' + esc(S.brand.toUpperCase()) + '_TOKEN และ LIFF_ID ในไฟล์ .env ของ server ก่อน</div>') +
+      '<div class="rm"><div class="rm-col">' +
+      '<div class="card"><div class="rm-step"><i>1</i><h2>เลือกแบบช่อง</h2><small class="muted">รูปต้องมีขนาดตามแบบที่เลือก</small></div><div class="rm-lays">' +
+        Object.entries(d.layouts).map(([k, l]) => '<button type="button" class="rm-lay' + (k === r.layout ? ' on' : '') + '" data-a="rmLayout" data-v="' + k + '" aria-pressed="' + (k === r.layout) + '">' + rmThumb(l) + '<b>' + esc(l.name) + '</b><small>' + l.width + ' × ' + l.height + '</small></button>').join('') +
+        '</div><button type="button" class="btn ghost sm" data-a="rmGuide" style="align-self:flex-start">ดาวน์โหลดแผนผังขนาดของแบบนี้ (PNG)</button></div>' +
+      '<div class="card"><div class="rm-step"><i>2</i><h2>รูปเมนู</h2></div><div class="rm-drop">' +
+        (img ? '<img src="' + esc(img) + '" alt="">' : '<span class="rm-empty">ยังไม่มีรูป</span>') +
+        '<div class="rm-info">' + (r.img ? '<span class="ok">✓ ' + esc(r.img.name) + '</span><span class="ok">✓ ' + lay.width + ' × ' + lay.height + ' px' + (r.img.resized ? ' (ปรับขนาด/บีบอัดให้แล้ว)' : '') + '</span><span class="ok">✓ ' + Math.round(r.img.size / 1024) + ' KB (ไม่เกิน 1 MB)</span>'
+          : from ? '<span>ใช้รูปของเมนูที่ใช้อยู่</span><small class="muted">อัปโหลดรูปใหม่ถ้าต้องการเปลี่ยนภาพ</small>' : '<span>เลือกไฟล์ JPG หรือ PNG ขนาด ' + lay.width + ' × ' + lay.height + ' px</span><small class="muted">รูปสัดส่วนเดียวกันแต่ขนาดอื่น หรือไฟล์ใหญ่เกิน 1 MB ระบบปรับให้เอง</small>') + '</div>' +
+        '<label class="btn ghost sm rm-file">' + (img ? 'เปลี่ยนรูป' : 'เลือกรูป') + '<input id="rm-file" type="file" accept="image/png,image/jpeg" hidden></label></div>' +
+        (r.err ? '<div class="err" role="alert">' + esc(r.err) + '</div>' : '') + '</div>' +
+      '<div class="card"><div class="rm-step"><i>3</i><h2>ตั้งค่าปุ่มแต่ละช่อง</h2></div><div class="rm-acts">' +
+        rmActs().map((a, i) => '<div class="rm-act' + (S.rm.sel === i ? ' sel' : '') + '"><span class="rm-zl">' + ZL(i) + '</span><select id="rm-k-' + i + '" data-rm="kind" data-i="' + i + '" aria-label="ปุ่มช่อง ' + ZL(i) + '">' +
+          Object.entries(d.actions).map(([k, x]) => '<option value="' + k + '"' + (a.kind === k ? ' selected' : '') + '>' + esc(x.name) + '</option>').join('') + '</select>' +
+          (d.actions[a.kind] && d.actions[a.kind].value ? '<input id="rm-v-' + i + '" data-rm="value" data-i="' + i + '" value="' + esc(a.value || '') + '" placeholder="' + (a.kind === 'uri' ? 'https://…' : 'ข้อความที่ส่งในแชท') + '" aria-label="ค่าของช่อง ' + ZL(i) + '">'
+            : '<span class="muted rm-auto">' + (a.kind === 'card' ? 'เปิดบัตรสมาชิก ' + esc(brand().short_name) + ' · ยังไม่เป็นสมาชิกจะเข้าหน้าสมัคร' : 'เปิดหน้า' + esc(d.actions[a.kind] ? d.actions[a.kind].name.split(' /')[0] : '') + ' ในบัตรสมาชิก') + '</span>') + '</div>').join('') +
+        '</div><div class="field" style="max-width:260px"><label for="rm-bar">ข้อความบนแถบเมนู (ไม่เกิน 14 ตัว)</label><input id="rm-bar" data-rm="bar" maxlength="14" value="' + esc(r.chatBar) + '"></div></div>' +
+      '</div><div class="rm-col rm-side">' +
+      '<div class="card"><div class="rm-step"><i>4</i><h2>ตรวจตำแหน่งปุ่ม</h2></div>' +
+        '<div class="rm-pv" style="aspect-ratio:' + lay.width + '/' + lay.height + '">' + (img ? '<img src="' + esc(img) + '" alt="">' : '') + rmZones(lay, true) + '</div>' +
+        '<small class="muted">กดช่องในภาพเพื่อไปแก้ปุ่มของช่องนั้น · ช่อง ' + ZL(r.sel) + ': ' + esc(actionLabel(r.actions[r.sel] || {}, d.actions)) + '</small>' +
+        '<div class="rm-phone"><div class="rm-chat"><span>สวัสดีครับ ยินดีต้อนรับสู่ ' + esc(brand().name) + '</span></div>' + (img ? '<img src="' + esc(img) + '" alt="">' : '<div class="rm-noimg" style="aspect-ratio:' + lay.width + '/' + lay.height + '"></div>') + '<div class="rm-bar">' + esc(r.chatBar || 'เมนู') + ' ▾</div></div>' +
+        '<div class="rm-foot"><button type="button" class="btn" data-a="rmInstall"' + (ready ? '' : ' disabled') + '>ติดตั้งให้ OA ' + esc(brand().short_name) + '</button><button type="button" class="btn ghost" data-a="rmUndo">ล้างการแก้ไข</button></div>' +
+        '<small class="muted">ติดตั้งแล้วลูกค้าทุกคนใน OA นี้เห็นเมนูใหม่ภายในไม่กี่นาที (บางคนต้องปิดแล้วเปิดแชทใหม่)</small></div>' +
+      '</div></div>' +
+      '<div class="card"><div class="hd"><h2>ประวัติเมนู</h2><small class="muted">กด "ใช้เมนูนี้อีกครั้ง" เพื่อย้อนกลับไปใช้รูปและปุ่มของเมนูนั้น</small></div>' +
+        (d.list.length ? '<div class="rm-hist">' + d.list.map((x) => '<div class="rm-h' + (x.is_active ? ' on' : '') + '"><img src="' + esc(x.image) + '" alt="" loading="lazy"><div><b>#' + x.id + ' · ' + esc(d.layouts[x.layout] ? d.layouts[x.layout].name : x.layout) + '</b>' + (x.is_active ? ' <span class="pill">ใช้อยู่</span>' : '') +
+          '<small class="muted">ติดตั้ง ' + date(x.installed_at) + ' ' + new Date(x.installed_at).toTimeString().slice(0, 5) + (x.created_by ? ' · สร้างโดย ' + esc(x.created_by) : '') + '</small>' +
+          '<small class="muted">' + x.actions.map((a, i) => ZL(i) + ': ' + esc(actionLabel(a, d.actions))).join(' · ') + '</small></div>' +
+          (x.is_active ? '' : '<button type="button" class="btn ghost sm" data-a="rmRestore" data-v="' + x.id + '"' + (d.configured ? '' : ' disabled') + '>ใช้เมนูนี้อีกครั้ง</button>') + '</div>').join('') + '</div>'
+          : '<p class="muted">ยังไม่มีเมนูที่ติดตั้งจากหน้านี้</p>') + '</div>';
+  }
+  // รูปที่เลือก: สัดส่วนต้องตรงกับแบบ · ขนาดอื่นหรือไฟล์เกิน 1 MB ย่อ/บีบอัดเป็น JPG ให้
+  function rmPrepare(file, lay) {
+    return new Promise((ok, fail) => {
+      if (!/^image\/(png|jpeg)$/.test(file.type)) return fail(new Error('รองรับเฉพาะรูป JPG หรือ PNG'));
+      if (file.size > 15 * 1024 * 1024) return fail(new Error('ไฟล์ใหญ่เกินไป'));
+      const rd = new FileReader();
+      rd.onerror = () => fail(new Error('อ่านไฟล์ไม่สำเร็จ'));
+      rd.onload = () => {
+        const im = new Image();
+        im.onerror = () => fail(new Error('ไฟล์นี้ไม่ใช่รูปภาพ'));
+        im.onload = () => {
+          const w = im.naturalWidth; const h = im.naturalHeight;
+          if (Math.abs(w / h - lay.width / lay.height) > 0.01) return fail(new Error('สัดส่วนรูปไม่ตรงกับแบบ ' + lay.name + ' · ต้องเป็น ' + lay.width + ' × ' + lay.height + ' px (รูปนี้ ' + w + ' × ' + h + ')'));
+          if (w === lay.width && h === lay.height && file.size <= 1024 * 1024) return ok({ dataUrl: rd.result, size: file.size, name: file.name, resized: false });
+          const c = document.createElement('canvas'); c.width = lay.width; c.height = lay.height;
+          const g = c.getContext('2d'); g.fillStyle = '#fff'; g.fillRect(0, 0, c.width, c.height); g.drawImage(im, 0, 0, c.width, c.height);
+          let qv = 0.92; let url = c.toDataURL('image/jpeg', qv);
+          while ((url.length - 23) * 0.75 > 1000 * 1000 && qv > 0.4) { qv -= 0.08; url = c.toDataURL('image/jpeg', qv); }
+          const size = Math.round((url.length - 23) * 0.75);
+          if (size > 1024 * 1024) return fail(new Error('บีบอัดรูปให้ไม่เกิน 1 MB ไม่ได้ ลองใช้รูปที่รายละเอียดน้อยลง'));
+          ok({ dataUrl: url, size, name: file.name, resized: true });
+        };
+        im.src = rd.result;
+      };
+      rd.readAsDataURL(file);
+    });
+  }
+  // แผนผังขนาดของแบบที่เลือก ไว้ส่งให้คนออกแบบ
+  function rmGuide(lay) {
+    const c = document.createElement('canvas'); c.width = lay.width; c.height = lay.height; const g = c.getContext('2d');
+    const cols = ['#C7481A', '#2A1E1A', '#8A3A16', '#A9532B', '#5B3424', '#D0693C'];
+    g.fillStyle = '#FDF3EC'; g.fillRect(0, 0, c.width, c.height);
+    lay.areas.forEach(([x, y, w, h], i) => {
+      g.fillStyle = cols[i % cols.length]; g.fillRect(x + 6, y + 6, w - 12, h - 12);
+      const cx = x + w / 2; const cy = y + h / 2; const f = Math.min(w, h) / 7;
+      g.textAlign = 'center'; g.textBaseline = 'middle';
+      g.fillStyle = '#06C755'; g.beginPath(); g.arc(cx, cy - f * 1.6, f * 0.75, 0, Math.PI * 2); g.fill();
+      g.fillStyle = '#fff'; g.font = '700 ' + f + 'px sans-serif'; g.fillText(ZL(i), cx, cy - f * 1.55);
+      g.fillStyle = '#FFE16B'; g.font = '700 ' + f * 1.1 + 'px sans-serif'; g.fillText(w + ' × ' + h, cx, cy + f * 0.3);
+      g.fillStyle = '#fff'; g.font = f * 0.55 + 'px sans-serif'; g.fillText('x ' + x + ' · y ' + y, cx, cy + f * 1.5);
+    });
+    g.textAlign = 'left'; g.fillStyle = '#fff'; g.font = '40px sans-serif'; g.fillText(lay.name + ' · ทั้งภาพ ' + lay.width + ' × ' + lay.height + ' px · JPG/PNG ≤ 1 MB', 40, lay.height - 44);
+    c.toBlob((b) => { const a = document.createElement('a'); a.href = URL.createObjectURL(b); a.download = 'richmenu-' + S.rm.layout + '-sizes.png'; document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 1000); }, 'image/png');
   }
   // ย่อรูปในเบราว์เซอร์ก่อนอัปโหลด (กว้างไม่เกิน 1080 px) · GIF ส่งไฟล์เดิมเพื่อไม่ให้ภาพเคลื่อนไหวหาย
   function shrinkImage(file) {
@@ -646,6 +747,29 @@
 
   /* ---------- การกด ---------- */
   const A = {
+    rmLayout: (v) => {
+      const r = S.rm; if (r.layout === v) return;
+      const n = S.data.rm.layouts[v].areas.length;
+      r.layout = v; while (r.actions.length < n) r.actions.push({ kind: 'message', value: '' }); r.sel = 0; r.err = '';     // เก็บปุ่มช่องท้ายไว้ เผื่อสลับกลับแบบเดิม
+      if (r.img) { r.img = null; toast('เปลี่ยนแบบแล้ว อัปโหลดรูปที่มีขนาดตามแบบใหม่'); }
+      const f = rmFrom(); if (f && f.layout !== v) r.fromId = null;
+      if (!r.fromId) { const cur = S.data.rm.list.find((x) => x.is_active && x.layout === v); if (cur) r.fromId = cur.id; }
+      render();
+    },
+    rmZone: (v) => { S.rm.sel = Number(v); render(); const el = document.getElementById('rm-k-' + v); if (el) { el.focus(); el.scrollIntoView({ block: 'center' }); } },
+    rmGuide: () => rmGuide(rmLay()),
+    rmUndo: () => { rmReset(); render(); },
+    rmInstall: async () => {
+      const r = S.rm;
+      if (!confirm('ติดตั้งเมนูนี้ให้ลูกค้าทุกคนใน OA ' + brand().name + ' ตอนนี้เลยไหม?')) return;
+      await api('POST', '/api/admin/richmenus', { brand: S.brand, layout: r.layout, actions: rmActs(), chatBar: r.chatBar, dataUrl: r.img ? r.img.dataUrl : undefined, fromId: r.img ? undefined : r.fromId });
+      toast('ติดตั้งเมนูให้ OA แล้ว'); S.rm = null; await load();
+    },
+    rmRestore: async (v) => {
+      if (!confirm('ย้อนกลับไปใช้เมนู #' + v + ' ให้ลูกค้าทุกคนใน OA ' + brand().name + ' ไหม?')) return;
+      await api('POST', '/api/admin/richmenus/' + v + '/restore', {});
+      toast('กลับไปใช้เมนู #' + v + ' แล้ว'); S.rm = null; await load();
+    },
     reload: () => location.reload(),
     logout: () => logout(),
     page: async (v) => { S.page = v; S.edit = null; S.err = ''; S.member = null; await load(); window.scrollTo(0, 0); },
@@ -878,6 +1002,23 @@
     render();
     for (const k in keep) { const x = document.getElementById(k); if (x) x.value = keep[k]; }
     document.getElementById('s-role').focus();
+  });
+  // ริชเมนู: ช่องกรอกปุ่ม/แถบเมนู และไฟล์รูป
+  document.addEventListener('input', (e) => {
+    const k = e.target.dataset && e.target.dataset.rm; if (!k || !S.rm) return;
+    if (k === 'value') S.rm.actions[Number(e.target.dataset.i)].value = e.target.value;
+    if (k === 'bar') { S.rm.chatBar = e.target.value; document.querySelectorAll('.rm-bar').forEach((x) => { x.textContent = (e.target.value || 'เมนู') + ' ▾'; }); }
+  });
+  document.addEventListener('change', async (e) => {
+    if (!S.rm || S.page !== 'richmenu') return;
+    if (e.target.dataset && e.target.dataset.rm === 'kind') {
+      const i = Number(e.target.dataset.i); S.rm.actions[i] = { kind: e.target.value, value: '' }; S.rm.sel = i; render();
+      const el = document.getElementById(S.data.rm.actions[e.target.value].value ? 'rm-v-' + i : 'rm-k-' + i); if (el) el.focus();
+      return;
+    }
+    if (e.target.id !== 'rm-file' || !e.target.files[0]) return;
+    try { S.rm.img = await rmPrepare(e.target.files[0], rmLay()); S.rm.err = ''; } catch (err) { S.rm.img = null; S.rm.err = err.message; }
+    e.target.value = ''; render();
   });
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && S.edit) A.close(); });
 

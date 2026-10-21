@@ -42,10 +42,11 @@ export function buildServer() {
       return send(res, 404, { error: 'not_found' });
     }
     // รูปคูปอง: ส่งเป็นไฟล์รูปตรง ๆ (ไม่ใช่ JSON) เปิดสาธารณะเพื่อให้หน้า LIFF โหลดได้ · รูปไม่เปลี่ยนหลังอัปโหลด จึง cache ได้นาน
-    const img = req.method === 'GET' && /^\/api\/public\/coupon-images\/(\d+)$/.exec(path);
+    // รูปริชเมนูก็เป็นรูปที่ลูกค้าทุกคนใน OA เห็นอยู่แล้ว จึงเปิดสาธารณะแบบเดียวกัน
+    const img = req.method === 'GET' && /^\/api\/public\/(coupon|richmenu)-images\/(\d+)$/.exec(path);
     if (img) {
       try {
-        const row = await one('SELECT mime, data FROM coupon_images WHERE id = $1', [Number(img[1])]);
+        const row = await one('SELECT mime, data FROM ' + (img[1] === 'coupon' ? 'coupon_images' : 'rich_menus') + ' WHERE id = $1', [Number(img[2])]);
         if (!row) return send(res, 404, { error: 'not_found' });
         res.writeHead(200, { 'content-type': row.mime, 'cache-control': 'public, max-age=31536000, immutable', 'x-content-type-options': 'nosniff' });
         return res.end(Buffer.isBuffer(row.data) ? row.data : Buffer.from(String(row.data).replace(/^\\x/, ''), 'hex'));
@@ -56,7 +57,7 @@ export function buildServer() {
     try {
       if (!m) throw new HttpError(404, 'not_found', 'ไม่พบ endpoint');
       if (req.method !== 'GET') {
-        raw = await readBody(req, path === '/api/admin/coupon-images' ? 4e6 : 1e6);
+        raw = await readBody(req, path === '/api/admin/coupon-images' || path === '/api/admin/richmenus' ? 4e6 : 1e6);
         if (raw.length) { try { body = JSON.parse(raw.toString('utf8')); } catch { throw new HttpError(400, 'bad_json', 'JSON ไม่ถูกต้อง'); } }
       }
       const [handler, summary] = m.handlers;
