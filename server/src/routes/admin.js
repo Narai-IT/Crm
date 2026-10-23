@@ -71,7 +71,8 @@ function templateFields(b) {
   if (!title) throw bad('title_required', 'ใส่ชื่อคูปอง');
   const style = ['baht', 'pct', 'free'].includes(b.type) ? b.type : 'baht';
   const items = itemRules(style, b);
-  const value = items.free ? Math.max(...items.free.map((x) => x.price)) || 1 : Number(b.value);
+  // มูลค่าเต็มของของฟรี (ใช้แสดงผล) · ส่วนลดจริงคิดจากราคาในบิลตอนชำระ
+  const value = items.free ? (items.freeMode === 'all' ? items.free.reduce((a, x) => a + x.price, 0) : Math.max(...items.free.map((x) => x.price)) * items.freeQty) || 1 : Number(b.value);
   if (!(value > 0) || (style === 'pct' && value > 100)) throw bad('value_invalid', style === 'free' ? 'ใส่ราคาของที่แจกฟรี (ใช้เป็นส่วนลดตอนปิดบิล)' : 'ใส่มูลค่าส่วนลดให้ถูกต้อง');
   const min = Math.max(0, Number(b.min) || 0);
   const maxDiscount = style === 'pct' && Number(b.maxDiscount) > 0 ? Number(b.maxDiscount) : null;
@@ -98,7 +99,8 @@ function templateFields(b) {
   // ป้ายบนคูปอง + เงื่อนไขย่อ (สร้างจากการตั้งค่า ลูกค้าเห็นตรงกับที่ระบบตรวจจริง)
   const big = style === 'free' ? 'ฟรี' : style === 'pct' ? '-' + value + '%' : '-' + value;
   const small = style === 'free' ? KIND_NAMES[kind] : style === 'pct' ? 'ส่วนลด' : 'บาท';
-  const cond = [items.free ? 'ฟรี ' + items.free.map((x) => x.name).join(' หรือ ') + ' 1 ชิ้น (ต้องมีในบิล)' : '',
+  const cond = [items.free ? 'ฟรี ' + (items.freeMode === 'all' ? items.free.map((x) => x.name).join(' + ') + ' อย่างละ 1 ชิ้น' + (items.freeNeedAll ? ' (ต้องมีครบทุกอย่างในบิล)' : ' (เฉพาะที่มีในบิล)')
+    : items.free.map((x) => x.name).join(' / ') + (items.freeMode === 'qty' ? ' รวม ' + items.freeQty + ' ชิ้น' : ' 1 ชิ้น') + ' (ต้องมีในบิล)') : '',
     items.condMode ? 'ต้องมี ' + items.condItems.map((x) => (x.type === 'cat' ? 'หมวด' : '') + x.name).join(items.condMode === 'all' ? ' และ ' : ' หรือ ') + (items.condQty > 1 ? ' รวม ' + items.condQty + ' ชิ้นขึ้นไป' : '') + ' ในบิล' : '',
     min ? 'ขั้นต่ำ ' + min + ' บาท' : '', maxDiscount ? 'ลดสูงสุด ' + maxDiscount + ' บาท' : '',
     useDays === 127 ? '' : 'ใช้ได้วัน ' + DAY_SHORT.filter((_, i) => useDays & (1 << i)).join(' '), '1 ใบใช้ได้ 1 ครั้ง'].filter(Boolean).join(' · ');
@@ -114,7 +116,9 @@ function itemRules(style, b) {
   const condItems = ['any', 'all'].includes(b.condMode) ? clean(b.condItems, true) : [];
   if (['any', 'all'].includes(b.condMode) && !condItems.length) throw bad('cond_required', 'เลือกเมนูหรือหมวดที่ต้องมีในบิลอย่างน้อย 1 รายการ (หรือเลือก "ไม่มีเงื่อนไข")');
   const condQty = Math.min(99, Math.max(1, parseInt(b.condQty, 10) || 1));
-  return { free: free.length ? free : null, condMode: condItems.length ? b.condMode : null, condItems: condItems.length ? condItems : null, condQty, condScope: b.condScope === 'items' && condItems.length ? 'items' : 'bill' };
+  const freeMode = ['one', 'qty', 'all'].includes(b.freeMode) && free.length ? b.freeMode : 'one';
+  const freeQty = freeMode === 'qty' ? Math.min(20, Math.max(1, parseInt(b.freeQty, 10) || 1)) : 1;
+  return { free: free.length ? free : null, freeMode, freeQty, freeNeedAll: freeMode === 'all' && !!b.freeNeedAll, condMode: condItems.length ? b.condMode : null, condItems: condItems.length ? condItems : null, condQty, condScope: b.condScope === 'items' && condItems.length ? 'items' : 'bill' };
 }
 // ของขวัญส่งอัตโนมัติตามรอบ (เฉพาะประเภทของขวัญ)
 function schedFields(kind, b) {
@@ -141,9 +145,9 @@ async function saveAudience(db, id, f) {
   await db.q(`UPDATE coupon_templates SET audience_tiers = $2,
       sched_since = CASE WHEN $3 AND (NOT auto_send OR sched_since IS NULL OR sched_kind IS DISTINCT FROM $4 OR sched_day IS DISTINCT FROM $5 OR sched_date IS DISTINCT FROM $6::date OR sched_time IS DISTINCT FROM $7::time) THEN now() ELSE sched_since END,
       auto_send = $3, sched_kind = $4, sched_day = $5, sched_date = $6::date, sched_time = $7::time, round_limit = $8, round_pick = $9, per_member = $10, notify_line = $11,
-      free_items = $12, cond_mode = $13, cond_items = $14, cond_qty = $15, cond_scope = $16 WHERE id = $1`,
+      free_items = $12, cond_mode = $13, cond_items = $14, cond_qty = $15, cond_scope = $16, free_mode = $17, free_qty = $18, free_need_all = $19 WHERE id = $1`,
     [id, f.tiers, x.auto, x.kind, x.day, x.date, x.time, x.limit, x.pick, x.perMember, x.notify,
-      f.items.free ? JSON.stringify(f.items.free) : null, f.items.condMode, f.items.condItems ? JSON.stringify(f.items.condItems) : null, f.items.condQty, f.items.condScope]);
+      f.items.free ? JSON.stringify(f.items.free) : null, f.items.condMode, f.items.condItems ? JSON.stringify(f.items.condItems) : null, f.items.condQty, f.items.condScope, f.items.freeMode, f.items.freeQty, f.items.freeNeedAll]);
 }
 const hhmm = (v) => { const x = String(v || '').trim(); if (!x) return null; if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(x.slice(0, 5))) throw bad('time_invalid', 'เวลาไม่ถูกต้อง'); return x.slice(0, 5); };
 function branchFields(b) {

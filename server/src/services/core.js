@@ -350,7 +350,7 @@ export async function claimCode(db, { memberId, brandId, code }) {
 
 /* ---------------- คูปอง/แลกแต้มที่หน้าร้าน ---------------- */
 const COUPON_CHECK_SQL = `SELECT c.*, t.title, t.badge_big, t.badge_small, t.condition_text, t.description, t.image_id, t.discount_type, t.discount_value, t.min_spend, t.max_discount, t.valid_from, t.use_days,
-    t.free_items, t.cond_mode, t.cond_items, t.cond_qty, t.cond_scope
+    t.free_items, t.free_mode, t.free_qty, t.free_need_all, t.cond_mode, t.cond_items, t.cond_qty, t.cond_scope
   FROM member_coupons c JOIN coupon_templates t ON t.id = c.template_id`;
 const bangkokDow = async (db) => (await db.one("SELECT extract(dow FROM now() AT TIME ZONE 'Asia/Bangkok')::int AS d")).d;
 // เหตุผลที่คูปองใช้กับบิลนี้ไม่ได้ (null = ใช้ได้)

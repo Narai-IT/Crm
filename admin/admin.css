@@ -304,3 +304,12 @@ details.adv[open] > *:not(summary) { margin-bottom: 12px; }
 .cond-sec { border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px; gap: 10px; }
 .cond-body { display: flex; flex-direction: column; gap: 10px; }
 .cond-sec input[type="number"] { min-height: 40px; border: 1px solid var(--line); border-radius: 10px; padding: 6px 10px; background: #fff; }
+
+/* ของฟรีหลายรายการ: ฟรีกี่ชิ้น */
+.free-mode { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
+.free-mode .lbl { font-size: 13px; font-weight: 600; color: var(--muted); }
+.fopt { display: flex; gap: 10px; align-items: flex-start; background: #fff; border: 1.5px solid var(--line); border-radius: 12px; padding: 10px 12px; cursor: pointer; }
+.fopt:has(input[type="radio"]:checked) { border-color: var(--a); box-shadow: 0 0 0 3px var(--as); }
+.fopt input[type="radio"] { margin-top: 4px; accent-color: var(--a); }
+.fopt b { display: block; font-size: 14px; } .fopt small { color: var(--muted); font-size: 13px; }
+.fopt input[type="number"] { width: 70px; min-height: 32px; border: 1px solid var(--line); border-radius: 8px; padding: 2px 8px; margin: 0 4px; }

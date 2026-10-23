@@ -33,19 +33,33 @@ export function itemProblem(c, cart) {
     if (missing.length) return { code: 'coupon_items', msg: 'ต้องมี ' + names(missing) + ' ในบิล' };
     if (total < need) return { code: 'coupon_items', msg: 'ต้องมี ' + names(c.cond_items) + (c.cond_mode === 'all' ? ' (ครบทุกรายการ)' : '') + ' รวมอย่างน้อย ' + need + ' ชิ้นในบิล' };
   }
-  if (c.free_items && c.free_items.length && !cart.some((l) => l.price > 0 && c.free_items.some((f) => hit(l, f)))) {
-    return { code: 'coupon_items', msg: 'ต้องมี ' + c.free_items.map((f) => f.name).join(' หรือ ') + ' ในบิลก่อน' };
+  if (c.free_items && c.free_items.length) {
+    const has = (f) => cart.some((l) => l.price > 0 && hit(l, f));
+    if (c.free_mode === 'all' && c.free_need_all) {
+      const missing = c.free_items.filter((f) => !has(f));
+      if (missing.length) return { code: 'coupon_items', msg: 'ต้องมี ' + missing.map((f) => f.name).join(', ') + ' ในบิล (ฟรีเมื่อมีครบทุกอย่าง)' };
+    } else if (!c.free_items.some(has)) {
+      return { code: 'coupon_items', msg: 'ต้องมี ' + c.free_items.map((f) => f.name).join(' หรือ ') + ' ในบิลก่อน' };
+    }
   }
   return null;
+}
+
+// มูลค่าของฟรีในบิลนี้ · one = ชิ้นที่ถูกที่สุด 1 ชิ้น · qty = รวม N ชิ้น ถูกที่สุดก่อน · all = ทุกเมนูในรายการ อย่างละ 1 ชิ้น (ชิ้นที่ถูกที่สุดของเมนูนั้น)
+function freeAmount(c, cart) {
+  const lines = cart.filter((l) => l.price > 0);
+  if (c.free_mode === 'all') {
+    return Math.round(c.free_items.reduce((a, f) => { const p = lines.filter((l) => hit(l, f)).map((l) => l.price); return a + (p.length ? Math.min(...p) : 0); }, 0) * 100) / 100;
+  }
+  const units = lines.filter((l) => c.free_items.some((f) => hit(l, f))).flatMap((l) => Array(Math.max(1, Math.floor(l.qty))).fill(l.price)).sort((a, b) => a - b);
+  const n = c.free_mode === 'qty' ? Math.max(1, c.free_qty || 1) : 1;
+  return Math.round(units.slice(0, n).reduce((a, p) => a + p, 0) * 100) / 100;
 }
 
 // ส่วนลดของคูปองที่มีกฎสินค้า (เรียกเมื่อ itemProblem ผ่านแล้ว) · null = ไม่มีกฎสินค้า ใช้วิธีคิดปกติ
 export function itemDiscount(c, cart, subtotal) {
   if (!hasItemRules(c) || !cart) return null;
-  if (c.free_items && c.free_items.length) {
-    const prices = cart.filter((l) => l.price > 0 && c.free_items.some((f) => hit(l, f))).map((l) => l.price);
-    return prices.length ? Math.min(Math.min(...prices), subtotal) : 0;          // ฟรี 1 ชิ้น (ชิ้นที่ถูกที่สุดถ้าเลือกไว้หลายเมนู)
-  }
+  if (c.free_items && c.free_items.length) return Math.min(freeAmount(c, cart), subtotal);
   if (c.cond_scope !== 'items') return null;
   const base = Math.min(subtotal, Math.round(cart.filter((l) => c.cond_items.some((r) => hit(l, r))).reduce((a, l) => a + l.price * l.qty, 0) * 100) / 100);
   if (c.discount_type === 'pct') { const d = Math.floor(base * Number(c.discount_value) / 100); return c.max_discount ? Math.min(d, Number(c.max_discount)) : d; }
