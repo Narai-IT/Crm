@@ -313,3 +313,7 @@ details.adv[open] > *:not(summary) { margin-bottom: 12px; }
 .fopt input[type="radio"] { margin-top: 4px; accent-color: var(--a); }
 .fopt b { display: block; font-size: 14px; } .fopt small { color: var(--muted); font-size: 13px; }
 .fopt input[type="number"] { width: 70px; min-height: 32px; border: 1px solid var(--line); border-radius: 8px; padding: 2px 8px; margin: 0 4px; }
+
+/* ของรางวัลแบบทั่วไป: ของฟรีจากเมนู POS + เงื่อนไขสินค้า (ใช้ชุดเดียวกับหน้าคูปอง) */
+.rw-items { display: flex; flex-direction: column; gap: 12px; padding: 4px 0 4px 132px; }
+@media (max-width: 760px) { .rw-items { padding-left: 0; } }

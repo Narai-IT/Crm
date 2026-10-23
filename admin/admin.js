@@ -141,7 +141,7 @@
       '</div>' + views[S.page]() + '</main></div>' + (S.edit ? dialog() : '');
     const auto = document.querySelector('[data-autofocus]'); if (auto) auto.focus();
     const cf = document.querySelector('form[data-f="coupon"]'); if (cf) { drawPick('free'); drawPick('cond'); syncCoupon(cf); }
-    const rf = document.querySelector('form[data-f="reward"]'); if (rf) syncReward(rf);
+    const rf = document.querySelector('form[data-f="reward"]'); if (rf) { drawPick('free'); drawPick('cond'); syncReward(rf); }
     const tf = document.querySelector('form[data-f="tag"]'); if (tf) syncTagForm(tf);
   }
 
@@ -205,7 +205,8 @@
         row('ประเภท', '<div class="segr">' + [['general', 'ทั่วไป'], ['coupon', 'คูปอง']].map((k) => '<label><input type="radio" name="kind" value="' + k[0] + '"' + ((r.kind || 'general') === k[0] ? ' checked' : '') + '><span>' + k[1] + '</span></label>').join('') + '</div>') +
         '<div data-rk="general">' +
           row('หมวด', '<select id="rw-cat" name="cat">' + Object.entries(CATS).map(([k, v]) => '<option value="' + k + '"' + (r.category === k ? ' selected' : '') + '>' + v + '</option>').join('') + '</select>', 'rw-cat') +
-          row('มูลค่า (บาท/%)', '<div class="rw-inline"><input id="rw-val" name="value" type="number" min="0" step="0.01" class="sm-in" value="' + esc(Number(r.discount_value) || '') + '"><select name="type" aria-label="แบบส่วนลด"><option value="baht"' + (r.discount_type !== 'pct' ? ' selected' : '') + '>บาท</option><option value="pct"' + (r.discount_type === 'pct' ? ' selected' : '') + '>%</option></select></div><span class="hint">ของฟรี: ใส่ราคาของชิ้นนั้น (ใช้เป็นส่วนลดตอนปิดบิล) · % ใช้กับหมวดส่วนลด</span>', 'rw-val') +
+          '<div data-show="val">' + row('มูลค่า (บาท/%)', '<div class="rw-inline"><input id="rw-val" name="value" type="number" min="0" step="0.01" class="sm-in" value="' + esc(Number(r.discount_value) || '') + '"><select name="type" aria-label="แบบส่วนลด"><option value="baht"' + (r.discount_type !== 'pct' ? ' selected' : '') + '>บาท</option><option value="pct"' + (r.discount_type === 'pct' ? ' selected' : '') + '>%</option></select></div><span class="hint">ของฟรี: ใส่ราคาของชิ้นนั้น (ใช้เป็นส่วนลดตอนปิดบิล) · % ใช้กับหมวดส่วนลด</span>', 'rw-val') + '</div>' +
+          '<div class="rw-items">' + itemSections(false, r) + '</div>' +
           row('ยอดซื้อขั้นต่ำ', '<input id="rw-min" name="min" type="number" min="0" class="sm-in" value="' + esc(Number(r.min_spend) || 0) + '"> บาท', 'rw-min') +
           row('คูปองใช้ได้', '<input id="rw-days" name="days" type="number" min="1" max="365" class="sm-in" value="' + esc(r.valid_days || 30) + '"> วันหลังแลก', 'rw-days') +
         '</div>' +
@@ -227,6 +228,11 @@
     const stockSet = (el.querySelector('input[name="stockMode"]:checked') || {}).value === 'set';
     const limSet = (el.querySelector('input[name="limitMode"]:checked') || {}).value === 'set';
     el.elements.stock.disabled = !stockSet; el.elements.limitCount.disabled = !limSet; el.elements.limitPeriod.disabled = !limSet;
+    // ของฟรีจากเมนู POS (ไม่ใช่หมวดส่วนลด) + เงื่อนไขสินค้า
+    const cat = el.elements.cat ? el.elements.cat.value : 'food'; const pick = (n) => (el.querySelector('input[name="' + n + '"]:checked') || {}).value;
+    const free = S.edit.free || [];
+    const show = { free: cat !== 'discount', val: cat === 'discount' || !free.length, fmenu: cat !== 'discount' && free.length > 1, fall: pick('freeMode') === 'all', cond: !!pick('condMode'), notfree: cat === 'discount' || !free.length };
+    el.querySelectorAll('[data-show]').forEach((x) => { x.hidden = !show[x.dataset.show]; });
   }
   function rerenderRewardImage() {
     const box = document.getElementById('rw-img'); if (!box) return;
@@ -353,7 +359,7 @@
   const chipHtml = (kind, x, i, locked) => '<span class="chip' + (x.type === 'cat' ? ' cat' : '') + '">' + (x.type === 'cat' ? 'หมวด: ' : '') + esc(x.name) + (x.price !== undefined ? ' · ฿' + fmt(x.price) : '') +
     (locked ? '' : '<button type="button" class="x" data-a="pickDel" data-v="' + kind + ':' + i + '" aria-label="เอาออก">×</button>') + '</span>';
   function drawPick(kind) {
-    const e = S.edit; if (!e || e.kind !== 'coupon') return;
+    const e = S.edit; if (!e || (e.kind !== 'coupon' && e.kind !== 'reward')) return;
     const list = kind === 'free' ? e.free : e.cond.items; const locked = kind === 'free' && e.locked;
     const box = document.getElementById('pick-' + kind + '-chips');
     if (box) box.innerHTML = list.length ? list.map((x, i) => chipHtml(kind, x, i, locked)).join('') : '<span class="muted" style="font-size:13px">' + (kind === 'free' ? 'ยังไม่ได้เลือกเมนู' : 'ยังไม่ได้เลือก') + '</span>';
@@ -872,11 +878,11 @@
       if (kind === 'free') e.free.push({ id: src.id, name: src.name, price: src.price });
       else e.cond.items.push({ type, id: src.id, name: src.name });
       const q = document.querySelector('.mp-q[data-pick="' + kind + '"]'); if (q) { q.value = ''; q.focus(); }
-      drawPick(kind); const f = document.querySelector('form[data-f="coupon"]'); if (f) syncCoupon(f);
+      drawPick(kind); const f = document.querySelector('form[data-f="coupon"]'); if (f) syncCoupon(f); const rf = document.querySelector('form[data-f="reward"]'); if (rf) syncReward(rf);
     },
     pickDel: (v) => {
       const [kind, i] = v.split(':'); const list = kind === 'free' ? S.edit.free : S.edit.cond.items; list.splice(Number(i), 1);
-      drawPick(kind); const f = document.querySelector('form[data-f="coupon"]'); if (f) syncCoupon(f);
+      drawPick(kind); const f = document.querySelector('form[data-f="coupon"]'); if (f) syncCoupon(f); const rf = document.querySelector('form[data-f="reward"]'); if (rf) syncReward(rf);
     },
     rmLayout: (v) => {
       const r = S.rm; if (r.layout === v) return;
@@ -906,9 +912,13 @@
     page: async (v) => { S.page = v; S.edit = null; S.err = ''; S.member = null; await load(); window.scrollTo(0, 0); },
     brand: async (v) => { S.brand = v; store.set('crm-admin-brand', v); S.member = null; applyTheme(); await load(); },
     close: () => { S.edit = null; S.err = ''; render(); },
-    editReward: (v) => {
+    editReward: async (v) => {
       const r = v === 'new' ? null : S.data.rewards.find((x) => String(x.id) === String(v));
-      S.edit = { kind: 'reward', id: v, imageId: r ? r.image_id : null, imageUrl: r && r.image_id ? '/api/public/coupon-images/' + r.image_id : null }; S.err = ''; render();
+      const menu = await api('GET', '/api/admin/pos-menu?brand=' + S.brand);
+      const g = r && r.kind === 'general';
+      S.edit = { kind: 'reward', id: v, imageId: r ? r.image_id : null, imageUrl: r && r.image_id ? '/api/public/coupon-images/' + r.image_id : null, menu,
+        free: (g && r.free_items) || [], cond: { mode: (g && r.cond_mode) || '', items: (g && r.cond_items) || [], qty: (g && r.cond_qty) || 1, scope: (g && r.cond_scope) || 'bill' } };
+      S.err = ''; render();
     },
     dropRewardImage: () => { S.edit.imageId = null; S.edit.imageUrl = null; rerenderRewardImage(); },
     editBranch: (v) => { S.edit = { kind: 'branch', id: v || null }; S.err = ''; render(); },
@@ -999,7 +1009,9 @@
       if (limSet && !(Number(o.limitCount) > 0)) throw new Error('ใส่จำนวนครั้งที่แลกได้ต่อคน หรือเลือก "ไม่จำกัดจำนวน"');
       const body = { brand: S.brand, kind: pick('kind') || 'general', name: o.name, description: o.description, imageId: S.edit.imageId || null, cat: o.cat, cost: o.cost, type: o.type, value: o.value || 0, min: o.min || 0, days: o.days,
         templateId: o.templateId || null, stock: stockSet ? o.stock : null, limitCount: limSet ? o.limitCount : null, limitPeriod: limSet ? o.limitPeriod : 'all',
-        tiers: TIERS.map((t) => t[0]).filter((t) => o['tier_' + t]), startDate: o.startDate || null, endDate: o.endDate || null, active: o.active };
+        tiers: TIERS.map((t) => t[0]).filter((t) => o['tier_' + t]), startDate: o.startDate || null, endDate: o.endDate || null, active: o.active,
+        freeItems: o.cat !== 'discount' ? S.edit.free : [], freeMode: pick('freeMode') || 'one', freeQty: o.freeQty, freeNeedAll: !!o.freeNeedAll,
+        condMode: pick('condMode') || '', condItems: pick('condMode') ? S.edit.cond.items : [], condQty: o.condQty, condScope: pick('condScope') || 'bill' };
       if (id === 'new') await api('POST', '/api/admin/rewards', body); else await api('PATCH', '/api/admin/rewards/' + id, body);
       S.edit = null; toast('บันทึกของรางวัลแล้ว'); await load();
     },
