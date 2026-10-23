@@ -340,7 +340,8 @@ export async function claimCode(db, { memberId, brandId, code }) {
   const open = await db.one(`SELECT 1 FROM coupon_templates t WHERE t.id = $1 AND ${OPEN_TPL}`, [p.coupon_template_id]);
   if (!open) throw bad('code_invalid', 'โค้ดนี้หมดเขตหรือปิดใช้งานแล้ว');
   if (p.max_uses !== null && p.used_count >= p.max_uses) throw conflict('code_used_up', 'โค้ดนี้ถูกใช้ครบแล้ว');
-  const before = await db.one("SELECT id FROM member_coupons WHERE member_id = $1 AND source = 'code' AND source_ref = $2", [memberId, p.code]);
+  // ได้คูปองนี้จากโค้ดไปแล้ว (รวมโค้ดเดิมก่อนร้านเปลี่ยนโค้ด) กรอกซ้ำไม่ได้
+  const before = await db.one("SELECT id FROM member_coupons WHERE member_id = $1 AND source = 'code' AND (source_ref = $2 OR template_id = $3)", [memberId, p.code, p.coupon_template_id]);
   if (before) throw conflict('code_already_claimed', 'คุณเพิ่มโค้ดนี้ไปแล้ว');
   const c = await issueCoupon(db, { memberId, templateId: p.coupon_template_id, source: 'code', sourceRef: p.code });
   await db.q('UPDATE promo_codes SET used_count = used_count + 1 WHERE code = $1', [p.code]);
@@ -349,7 +350,7 @@ export async function claimCode(db, { memberId, brandId, code }) {
 
 /* ---------------- คูปอง/แลกแต้มที่หน้าร้าน ---------------- */
 const COUPON_CHECK_SQL = `SELECT c.*, t.title, t.badge_big, t.badge_small, t.condition_text, t.description, t.image_id, t.discount_type, t.discount_value, t.min_spend, t.max_discount, t.valid_from, t.use_days,
-    t.free_items, t.cond_mode, t.cond_items, t.cond_qty, t.cond_scope
+    t.free_items, t.free_mode, t.free_qty, t.free_need_all, t.cond_mode, t.cond_items, t.cond_qty, t.cond_scope
   FROM member_coupons c JOIN coupon_templates t ON t.id = c.template_id`;
 const bangkokDow = async (db) => (await db.one("SELECT extract(dow FROM now() AT TIME ZONE 'Asia/Bangkok')::int AS d")).d;
 // เหตุผลที่คูปองใช้กับบิลนี้ไม่ได้ (null = ใช้ได้)

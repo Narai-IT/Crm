@@ -332,13 +332,18 @@
     }, 350);
   }
   // ของฟรี (เลือกเมนูจาก POS) + เงื่อนไขสินค้าในบิล · ค่าที่เลือกเก็บใน S.edit.free / S.edit.cond แล้ววาดเฉพาะส่วนนี้ใหม่ (ฟอร์มที่กรอกไว้ไม่หาย)
-  function itemSections(locked) {
+  function itemSections(locked, x) {
     const e = S.edit; const menu = e.menu || { items: [], categories: [] }; const c = e.cond;
     const radio = (name, val, cur, label) => '<label class="check"><input type="radio" name="' + name + '" value="' + val + '"' + (String(cur) === String(val) ? ' checked' : '') + '>' + label + '</label>';
     const sync = menu.syncedAt ? 'เมนูจาก POS อัปเดตล่าสุด ' + dt(menu.syncedAt) + ' · ' + fmt(menu.items.length) + ' รายการ' : 'ยังไม่มีเมนูจาก POS (อัปเดตเครื่อง POS API แล้วรอสักครู่)';
     return '<div class="field" data-show="free"><span class="lbl">ของที่ได้ฟรี (เลือกจากเมนู POS)</span>' +
         '<div class="mpick"><div class="chips" id="pick-free-chips"></div>' + (locked ? '' : '<input class="mp-q" data-pick="free" placeholder="ค้นหาเมนู…" aria-label="ค้นหาเมนูของฟรี" autocomplete="off"><div class="mp-list" id="pick-free-list"></div>') + '</div>' +
-        '<span class="hint">ใช้ได้เมื่อบิลมีเมนูนี้อยู่แล้ว · ลดเท่าราคาเมนูนั้น 1 ชิ้น (เลือกหลายเมนู = ลดชิ้นที่ถูกที่สุด) · ไม่เลือกเมนู = ใส่ราคาของเองแบบเดิม</span><span class="hint">' + esc(sync) + '</span></div>' +
+        '<div class="free-mode" data-show="fmenu"><span class="lbl">ฟรีกี่ชิ้น</span>' +
+          '<label class="fopt"><input type="radio" name="freeMode" value="one"' + (x.free_mode === 'qty' || x.free_mode === 'all' ? '' : ' checked') + '><span><b>ฟรี 1 ชิ้น</b><small>เลือกได้ 1 อย่างจากรายการ · บิลมีหลายอย่าง ลดชิ้นที่ราคาถูกที่สุด</small></span></label>' +
+          '<label class="fopt"><input type="radio" name="freeMode" value="qty"' + (x.free_mode === 'qty' ? ' checked' : '') + '><span><b>ฟรีรวม <input type="number" name="freeQty" min="1" max="20" value="' + esc(x.free_qty || 2) + '" aria-label="จำนวนชิ้นที่ฟรี"> ชิ้น</b><small>นับรวมทุกเมนูในรายการ · ลดชิ้นที่ถูกที่สุดก่อน</small></span></label>' +
+          '<label class="fopt"><input type="radio" name="freeMode" value="all"' + (x.free_mode === 'all' ? ' checked' : '') + '><span><b>ฟรีทุกเมนูในรายการ (อย่างละ 1 ชิ้น)</b><small>เมนูไหนอยู่ในบิล ลดให้เมนูละ 1 ชิ้น</small></span></label>' +
+          '<label class="check" data-show="fall"><input type="checkbox" name="freeNeedAll"' + (x.free_need_all ? ' checked' : '') + '>ต้องมีครบทุกเมนูในรายการถึงจะใช้ได้</label></div>' +
+        '<span class="hint">ใช้ได้เมื่อบิลมีเมนูของฟรีอยู่แล้ว · ส่วนลด = ราคาเมนูที่ฟรี (ราคาในบิลตอนชำระ) · ไม่เลือกเมนู = ใส่ราคาของเองแบบเดิม</span><span class="hint">' + esc(sync) + '</span></div>' +
       '<fieldset class="field cond-sec"><legend>เงื่อนไขสินค้าในบิล</legend><div class="row-in">' + radio('condMode', '', c.mode || '', 'ไม่มีเงื่อนไข') + radio('condMode', 'any', c.mode || '', 'ต้องมีอย่างใดอย่างหนึ่ง') + radio('condMode', 'all', c.mode || '', 'ต้องมีครบทุกรายการ') + '</div>' +
         '<div class="cond-body" data-show="cond"><div class="mpick"><div class="chips" id="pick-cond-chips"></div><input class="mp-q" data-pick="cond" placeholder="ค้นหาเมนูหรือหมวด…" aria-label="ค้นหาเมนูหรือหมวดที่ต้องมี" autocomplete="off"><div class="mp-list" id="pick-cond-list"></div></div>' +
         '<div class="row-in"><span>รวมกันอย่างน้อย</span><input type="number" name="condQty" min="1" max="99" style="width:80px" aria-label="จำนวนชิ้นขั้นต่ำ" value="' + esc(c.qty || 1) + '"><span>ชิ้น</span></div>' +
@@ -363,16 +368,22 @@
       items.map((x) => '<button type="button" class="mi" data-a="pickAdd" data-v="' + kind + ':item:' + esc(x.id) + '"><span>' + esc(x.name) + '</span><span class="p">' + esc(x.category_name || '') + ' · ฿' + fmt(x.price) + '</span></button>').join('') ||
       '<div class="muted" style="padding:8px 12px;font-size:13px">' + (menu.items.length ? 'ไม่พบเมนู "' + esc(q.value.trim()) + '"' : 'ยังไม่มีเมนูจาก POS') + '</div>';
   }
+  // ส่วนที่กระทบคูปองที่ลูกค้าถืออยู่ (ใช้เทียบก่อน/หลังแก้)
+  // ข้อความของฟรีตามจำนวนที่ฟรี (ภาพตัวอย่าง)
+  const freeText = (b, list) => (list.length < 2 ? list[0].name + ' 1 ชิ้น'
+    : b.freeMode === 'all' ? list.map((x) => x.name).join(' + ') + ' อย่างละ 1' + (b.freeNeedAll ? ' (ต้องมีครบ)' : '')
+      : list.map((x) => x.name).join(' / ') + (b.freeMode === 'qty' ? ' รวม ' + (Number(b.freeQty) || 1) + ' ชิ้น' : ' 1 ชิ้น'));
+  const discountKey = (b) => JSON.stringify([b.kind, b.type, Number(b.value) || 0, Number(b.maxDiscount) || 0, Number(b.min) || 0, b.useDays, String(b.code || '').toUpperCase(),
+    (b.freeItems || []).map((x) => x.id), b.freeMode, b.freeMode === 'qty' ? Number(b.freeQty) || 1 : 1, !!b.freeNeedAll, b.condMode || '', (b.condItems || []).map((x) => (x.type || 'item') + ':' + x.id), Number(b.condQty) || 1, b.condScope || 'bill']);
   function couponForm(id) {
     const t = id ? S.data.coupons.find((x) => String(x.id) === String(id)) : null;
     const x = t || { kind: 'general', title: '', description: '', discount_type: 'baht', badge_big: '', discount_value: '', min_spend: 0, max_discount: null, validity: 'days', valid_days: 30, valid_from: null, valid_to: null,
       issue_from: null, issue_to: null, branch_ids: null, audience_tiers: null, followers_only: false, use_days: 127, max_issue: null, is_active: true, code: '', issued: 0,
       auto_send: false, sched_kind: 'monthly', sched_day: 1, sched_date: null, sched_time: '09:00', round_limit: null, round_pick: 'points', per_member: 1, notify_line: false };
-    const style = t ? couponStyle(t) : 'baht'; const locked = t && t.issued > 0;
-    const lockAttr = locked ? ' disabled' : '';
+    const style = t ? couponStyle(t) : 'baht'; const locked = false; const lockAttr = '';
     const radio = (name, val, cur, label, extra) => '<label class="check"><input type="radio" name="' + name + '" value="' + val + '"' + (String(cur) === String(val) ? ' checked' : '') + (extra || '') + '>' + label + '</label>';
     return '<form class="coupon-ed" data-f="coupon" data-v="' + (id || '') + '"><div class="ed-form">' +
-      (locked ? '<div class="note">แจกไปแล้ว ' + fmt(t.issued) + ' ใบ จึงเปลี่ยนประเภท มูลค่าส่วนลด และโค้ดไม่ได้ (คูปองที่ลูกค้าถืออยู่ต้องไม่เปลี่ยน) ถ้าจะเปลี่ยนให้ปิดใบนี้แล้วสร้างใหม่</div>' : '') +
+      (t && t.issued > 0 ? '<div class="note">แจกไปแล้ว ' + fmt(t.issued) + ' ใบ (ใช้แล้ว ' + fmt(t.used) + ') · ถ้าแก้ส่วนลดหรือเงื่อนไข จะมีผลกับคูปองที่ลูกค้าถืออยู่และยังไม่ได้ใช้ทันที · วันหมดอายุของใบที่แจกไปแล้วไม่เปลี่ยน · บิลที่ใช้ไปแล้วไม่เปลี่ยน</div>' : '') +
       '<fieldset class="field"><legend>ประเภท</legend><div class="segr">' + KINDS.map((k) => '<label><input type="radio" name="kind" value="' + k[0] + '"' + (x.kind === k[0] ? ' checked' : '') + lockAttr + '><span>' + k[1] + '</span></label>').join('') + '</div><span class="hint" id="kind-hint"></span></fieldset>' +
       giftSection(x) +
       '<fieldset class="field" data-show="aud"><legend>ส่งให้ระดับ</legend><div class="row-in">' + TIER_KEYS.map((k) => '<label class="check tierc"><input type="checkbox" name="tiers" value="' + k + '"' + (!x.audience_tiers || !x.audience_tiers.length || x.audience_tiers.includes(k) ? ' checked' : '') + '>' + TIER_NAME[k] + '</label>').join('') + '</div>' +
@@ -389,7 +400,7 @@
         '<div class="field"><label for="c-min">ยอดซื้อขั้นต่ำ (บาท)</label><input id="c-min" name="min" type="number" min="0" value="' + esc(Number(x.min_spend) || 0) + '"' + lockAttr + '></div>' +
         '<div class="field" data-show="code"><label for="c-code">โค้ดที่ลูกค้ากรอก</label><input id="c-code" name="code" maxlength="20" autocapitalize="characters" placeholder="เช่น HUMLAI50" value="' + esc(x.code || '') + '"' + lockAttr + '></div>' +
       '</div>' +
-      itemSections(locked) +
+      itemSections(locked, x) +
       '<fieldset class="field" data-show="welcome"><legend>ให้กับสมาชิกที่สมัครที่สาขา</legend><div class="row-in">' + radio('wscope', 'all', x.branch_ids ? 'some' : 'all', 'ทุกสาขา') + radio('wscope', 'some', x.branch_ids ? 'some' : 'all', 'เฉพาะสาขาที่เลือก') + '</div>' +
         '<div class="row-in" data-show="wbr">' + brand().branches.map((br) => '<label class="check"><input type="checkbox" name="wb" value="' + esc(br.id) + '"' + ((x.branch_ids || []).includes(br.id) ? ' checked' : '') + '>' + esc(br.name) + '</label>').join('') + '</div>' +
         '<span class="hint">ใช้สาขาที่สมัครที่ลูกค้าเลือกในหน้าสมัคร · ตั้งคูปองต้อนรับหลายใบให้แต่ละสาขาต่างกันได้</span></fieldset>' +
@@ -416,7 +427,7 @@
       tiers: [...el.querySelectorAll('input[name="tiers"]:checked')].map((x) => x.value), followersOnly: v('followersOnly') === '1', useDays: mask,
       autoSend: v('kind') === 'gift' && v('autoSend') === '1', schedKind: v('schedKind'), schedDay: v('schedKind') === 'weekly' ? v('schedDayW') : v('schedDayM'), schedDate: v('schedDate'), schedTime: v('schedTime'),
       roundLimit: v('rlim') === '1' ? v('roundLimit') : '', roundPick: v('roundPick'), perMember: v('perMember'), notifyLine: v('notifyLine'),
-      freeItems: v('type') === 'free' ? S.edit.free : [], condMode: v('condMode'), condItems: v('condMode') ? S.edit.cond.items : [], condQty: v('condQty'), condScope: v('condScope'),
+      freeItems: v('type') === 'free' ? S.edit.free : [], freeMode: v('freeMode') || 'one', freeQty: v('freeQty'), freeNeedAll: v('freeNeedAll'), condMode: v('condMode'), condItems: v('condMode') ? S.edit.cond.items : [], condQty: v('condQty'), condScope: v('condScope'),
       branchIds: v('kind') === 'welcome' && v('wscope') === 'some' ? [...el.querySelectorAll('input[name="wb"]:checked')].map((x) => x.value) : null, maxIssue: v('limit') === '1' ? v('maxIssue') : '', active: v('active') };
   }
   function syncCoupon(el) {
@@ -424,7 +435,7 @@
     const show = { pct: b.type === 'pct', code: b.kind === 'code', welcome: b.kind === 'welcome', wbr: b.kind === 'welcome' && el.elements.wscope && el.elements.wscope.value === 'some', dates: b.validity === 'dates', days: b.validity !== 'dates', limit: el.elements.limit && el.elements.limit.value === '1',
       gift: b.kind === 'gift', auto: b.autoSend, sm: b.schedKind === 'monthly', sw: b.schedKind === 'weekly', so: b.schedKind === 'once', rlim: el.elements.rlim && el.elements.rlim.value === '1',
       aud: b.kind === 'general' || b.kind === 'birthday' || b.autoSend,
-      free: b.type === 'free', val: !(b.type === 'free' && S.edit.free.length), cond: !!b.condMode, notfree: b.type !== 'free' };
+      free: b.type === 'free', val: !(b.type === 'free' && S.edit.free.length), fmenu: S.edit.free.length > 1, fall: b.freeMode === 'all', cond: !!b.condMode, notfree: b.type !== 'free' };
     if (el.elements.value) { el.elements.value.required = show.val; el.elements.value.disabled = !show.val || !!S.edit.locked; }
     el.querySelectorAll('[data-show]').forEach((x) => { x.hidden = !show[x.dataset.show]; });
     const k = KINDS.find((x) => x[0] === b.kind); document.getElementById('kind-hint').textContent = k ? k[2] : '';
@@ -440,7 +451,7 @@
       (b.kind === 'welcome' ? '<div class="prev-sec"><b>ได้เมื่อ</b>' + row('สมัครที่สาขา', b.branchIds ? (b.branchIds.length ? b.branchIds.map(branchLabel).join(', ') : 'ยังไม่ได้เลือก') : 'ทุกสาขา') + '</div>' : '') +
       '<div class="prev-sec"><b>เงื่อนไข</b>' + row('ขั้นต่ำ', Number(b.min) ? fmt(b.min) + ' บาท' : 'ไม่มี') + (b.type === 'pct' && Number(b.maxDiscount) ? row('ลดสูงสุด', fmt(b.maxDiscount) + ' บาท') : '') + row('ใช้ได้เมื่อ', daysText(b.useDays || 0) || '-') +
         ((b.kind === 'general' || b.kind === 'birthday' || b.autoSend) && b.tiers.length < TIER_KEYS.length ? row('ระดับ', tiersText(b.tiers)) : '') +
-        (b.type === 'free' && S.edit.free.length ? row('ได้ฟรี', S.edit.free.map((x) => x.name).join(' หรือ ') + ' 1 ชิ้น') : '') +
+        (b.type === 'free' && S.edit.free.length ? row('ได้ฟรี', freeText(b, S.edit.free)) : '') +
         (b.condMode && S.edit.cond.items.length ? row('ต้องมีในบิล', S.edit.cond.items.map((x) => (x.type === 'cat' ? 'หมวด' : '') + x.name).join(b.condMode === 'all' ? ' และ ' : ' หรือ ') + (Number(b.condQty) > 1 ? ' รวม ' + b.condQty + ' ชิ้น' : '')) : '') +
         (b.autoSend ? row('รับได้', (Number(b.perMember) || 1) + ' ใบ ' + schedText({ kind: b.schedKind, day: Number(b.schedDay), date: b.schedDate, time: b.schedTime }).replace(/ เวลา .*/, '')) : '') +
         row('จำกัด', b.maxIssue ? fmt(b.maxIssue) + ' ใบ' : 'ไม่จำกัด') + '</div>';
@@ -931,9 +942,10 @@
       const t = v ? S.data.coupons.find((x) => String(x.id) === String(v)) : null;
       const [rounds, menu] = await Promise.all([t && t.kind === 'gift' ? api('GET', '/api/admin/coupon-templates/' + t.id + '/rounds') : [], api('GET', '/api/admin/pos-menu?brand=' + S.brand)]);
       roundKey = '';
-      S.edit = { kind: 'coupon', id: v || null, imageId: t ? t.image_id : null, imageUrl: t && t.image_id ? '/api/public/coupon-images/' + t.image_id : null, rounds, menu, locked: !!(t && t.issued > 0),
+      S.edit = { kind: 'coupon', id: v || null, imageId: t ? t.image_id : null, imageUrl: t && t.image_id ? '/api/public/coupon-images/' + t.image_id : null, rounds, menu, locked: false, issued: t ? t.issued - t.used : 0, before: null,
         free: (t && t.free_items) || [], cond: { mode: (t && t.cond_mode) || '', items: (t && t.cond_items) || [], qty: (t && t.cond_qty) || 1, scope: (t && t.cond_scope) || 'bill' } };
       S.err = ''; render(); drawPick('free'); drawPick('cond');
+      const cf = document.querySelector('form[data-f="coupon"]'); if (cf && t) S.edit.before = discountKey(couponBody(cf));
     },
     toggleCoupon: async (v) => {
       const t = S.data.coupons.find((x) => String(x.id) === String(v));
@@ -993,6 +1005,9 @@
     },
     coupon: async (_o, id, el) => {
       const body = couponBody(el);
+      // แก้ส่วนลด/เงื่อนไขของคูปองที่ลูกค้าถืออยู่ → ถามก่อน
+      if (id && S.edit.issued > 0 && S.edit.before && discountKey(body) !== S.edit.before &&
+        !confirm('คูปองนี้อยู่ในกระเป๋าลูกค้า ' + fmt(S.edit.issued) + ' ใบที่ยังไม่ได้ใช้\nส่วนลดและเงื่อนไขใหม่จะมีผลกับทุกใบทันที (วันหมดอายุเดิม)\n\nบันทึกการเปลี่ยนแปลงไหม?')) return;
       if (id) await api('PATCH', '/api/admin/coupon-templates/' + id, body); else await api('POST', '/api/admin/coupon-templates', body);
       S.edit = null; toast(id ? 'บันทึกคูปองแล้ว' : 'สร้างคูปองแล้ว'); await load();
     },
