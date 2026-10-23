@@ -363,16 +363,18 @@
       items.map((x) => '<button type="button" class="mi" data-a="pickAdd" data-v="' + kind + ':item:' + esc(x.id) + '"><span>' + esc(x.name) + '</span><span class="p">' + esc(x.category_name || '') + ' · ฿' + fmt(x.price) + '</span></button>').join('') ||
       '<div class="muted" style="padding:8px 12px;font-size:13px">' + (menu.items.length ? 'ไม่พบเมนู "' + esc(q.value.trim()) + '"' : 'ยังไม่มีเมนูจาก POS') + '</div>';
   }
+  // ส่วนที่กระทบคูปองที่ลูกค้าถืออยู่ (ใช้เทียบก่อน/หลังแก้)
+  const discountKey = (b) => JSON.stringify([b.kind, b.type, Number(b.value) || 0, Number(b.maxDiscount) || 0, Number(b.min) || 0, b.useDays, String(b.code || '').toUpperCase(),
+    (b.freeItems || []).map((x) => x.id), b.condMode || '', (b.condItems || []).map((x) => (x.type || 'item') + ':' + x.id), Number(b.condQty) || 1, b.condScope || 'bill']);
   function couponForm(id) {
     const t = id ? S.data.coupons.find((x) => String(x.id) === String(id)) : null;
     const x = t || { kind: 'general', title: '', description: '', discount_type: 'baht', badge_big: '', discount_value: '', min_spend: 0, max_discount: null, validity: 'days', valid_days: 30, valid_from: null, valid_to: null,
       issue_from: null, issue_to: null, branch_ids: null, audience_tiers: null, followers_only: false, use_days: 127, max_issue: null, is_active: true, code: '', issued: 0,
       auto_send: false, sched_kind: 'monthly', sched_day: 1, sched_date: null, sched_time: '09:00', round_limit: null, round_pick: 'points', per_member: 1, notify_line: false };
-    const style = t ? couponStyle(t) : 'baht'; const locked = t && t.issued > 0;
-    const lockAttr = locked ? ' disabled' : '';
+    const style = t ? couponStyle(t) : 'baht'; const locked = false; const lockAttr = '';
     const radio = (name, val, cur, label, extra) => '<label class="check"><input type="radio" name="' + name + '" value="' + val + '"' + (String(cur) === String(val) ? ' checked' : '') + (extra || '') + '>' + label + '</label>';
     return '<form class="coupon-ed" data-f="coupon" data-v="' + (id || '') + '"><div class="ed-form">' +
-      (locked ? '<div class="note">แจกไปแล้ว ' + fmt(t.issued) + ' ใบ จึงเปลี่ยนประเภท มูลค่าส่วนลด และโค้ดไม่ได้ (คูปองที่ลูกค้าถืออยู่ต้องไม่เปลี่ยน) ถ้าจะเปลี่ยนให้ปิดใบนี้แล้วสร้างใหม่</div>' : '') +
+      (t && t.issued > 0 ? '<div class="note">แจกไปแล้ว ' + fmt(t.issued) + ' ใบ (ใช้แล้ว ' + fmt(t.used) + ') · ถ้าแก้ส่วนลดหรือเงื่อนไข จะมีผลกับคูปองที่ลูกค้าถืออยู่และยังไม่ได้ใช้ทันที · วันหมดอายุของใบที่แจกไปแล้วไม่เปลี่ยน · บิลที่ใช้ไปแล้วไม่เปลี่ยน</div>' : '') +
       '<fieldset class="field"><legend>ประเภท</legend><div class="segr">' + KINDS.map((k) => '<label><input type="radio" name="kind" value="' + k[0] + '"' + (x.kind === k[0] ? ' checked' : '') + lockAttr + '><span>' + k[1] + '</span></label>').join('') + '</div><span class="hint" id="kind-hint"></span></fieldset>' +
       giftSection(x) +
       '<fieldset class="field" data-show="aud"><legend>ส่งให้ระดับ</legend><div class="row-in">' + TIER_KEYS.map((k) => '<label class="check tierc"><input type="checkbox" name="tiers" value="' + k + '"' + (!x.audience_tiers || !x.audience_tiers.length || x.audience_tiers.includes(k) ? ' checked' : '') + '>' + TIER_NAME[k] + '</label>').join('') + '</div>' +
@@ -931,9 +933,10 @@
       const t = v ? S.data.coupons.find((x) => String(x.id) === String(v)) : null;
       const [rounds, menu] = await Promise.all([t && t.kind === 'gift' ? api('GET', '/api/admin/coupon-templates/' + t.id + '/rounds') : [], api('GET', '/api/admin/pos-menu?brand=' + S.brand)]);
       roundKey = '';
-      S.edit = { kind: 'coupon', id: v || null, imageId: t ? t.image_id : null, imageUrl: t && t.image_id ? '/api/public/coupon-images/' + t.image_id : null, rounds, menu, locked: !!(t && t.issued > 0),
+      S.edit = { kind: 'coupon', id: v || null, imageId: t ? t.image_id : null, imageUrl: t && t.image_id ? '/api/public/coupon-images/' + t.image_id : null, rounds, menu, locked: false, issued: t ? t.issued - t.used : 0, before: null,
         free: (t && t.free_items) || [], cond: { mode: (t && t.cond_mode) || '', items: (t && t.cond_items) || [], qty: (t && t.cond_qty) || 1, scope: (t && t.cond_scope) || 'bill' } };
       S.err = ''; render(); drawPick('free'); drawPick('cond');
+      const cf = document.querySelector('form[data-f="coupon"]'); if (cf && t) S.edit.before = discountKey(couponBody(cf));
     },
     toggleCoupon: async (v) => {
       const t = S.data.coupons.find((x) => String(x.id) === String(v));
@@ -993,6 +996,9 @@
     },
     coupon: async (_o, id, el) => {
       const body = couponBody(el);
+      // แก้ส่วนลด/เงื่อนไขของคูปองที่ลูกค้าถืออยู่ → ถามก่อน
+      if (id && S.edit.issued > 0 && S.edit.before && discountKey(body) !== S.edit.before &&
+        !confirm('คูปองนี้อยู่ในกระเป๋าลูกค้า ' + fmt(S.edit.issued) + ' ใบที่ยังไม่ได้ใช้\nส่วนลดและเงื่อนไขใหม่จะมีผลกับทุกใบทันที (วันหมดอายุเดิม)\n\nบันทึกการเปลี่ยนแปลงไหม?')) return;
       if (id) await api('PATCH', '/api/admin/coupon-templates/' + id, body); else await api('POST', '/api/admin/coupon-templates', body);
       S.edit = null; toast(id ? 'บันทึกคูปองแล้ว' : 'สร้างคูปองแล้ว'); await load();
     },

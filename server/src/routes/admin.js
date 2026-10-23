@@ -159,7 +159,8 @@ async function checkBranches(brandId, ids) {
   return ids;
 }
 async function saveCode(db, t, f, oldCode) {
-  if (oldCode && oldCode !== f.code) await db.q('DELETE FROM promo_codes WHERE code = $1 AND used_count = 0', [oldCode]);
+  // เปลี่ยนโค้ด: โค้ดเดิมใช้ไม่ได้ทันที คูปองที่ลูกค้ากรอกไปแล้วยังอยู่ (คนที่เคยกรอกโค้ดเดิมกรอกโค้ดใหม่ซ้ำไม่ได้ ดู claimCode)
+  if (oldCode && oldCode !== f.code) await db.q('DELETE FROM promo_codes WHERE code = $1', [oldCode]);
   if (!f.code) return;
   const other = await db.one('SELECT coupon_template_id FROM promo_codes WHERE code = $1', [f.code]);
   if (other && other.coupon_template_id !== t.id) throw new HttpError(409, 'code_exists', 'โค้ด ' + f.code + ' ถูกใช้กับคูปองอื่นแล้ว');
@@ -674,14 +675,9 @@ export default function (r) {
     // แค่เปิด/ปิด
     const onlyToggle = Object.keys(b).length === 1 && 'active' in b;
     const f = onlyToggle ? null : templateFields(b);
-    if (f && old.issued > 0) {
-      // แจกไปแล้ว: ห้ามเปลี่ยนมูลค่า/เงื่อนไขที่ลูกค้าถืออยู่ ให้ปิดใบนี้แล้วสร้างใหม่แทน
-      const same = f.kind === old.kind && f.type === old.discount_type && f.value === Number(old.discount_value) && f.min === Number(old.min_spend) && (f.maxDiscount ?? null) === (old.max_discount === null ? null : Number(old.max_discount)) && f.big === old.badge_big
-        && JSON.stringify((f.items.free || []).map((x) => x.id)) === JSON.stringify((old.free_items || []).map((x) => x.id));
-      if (!same) throw bad('coupon_locked', 'คูปองนี้แจกไปแล้ว ' + old.issued + ' ใบ เปลี่ยนประเภทหรือมูลค่าส่วนลดไม่ได้ ให้ปิดใบนี้แล้วสร้างใหม่');
-      if ((f.code || null) !== (old.code || null)) throw bad('coupon_locked', 'คูปองนี้แจกไปแล้ว เปลี่ยนโค้ดไม่ได้');
-      if (f.maxIssue && f.maxIssue < old.issued) throw bad('max_issue_low', 'จำนวนจำกัดต้องไม่น้อยกว่าที่แจกไปแล้ว (' + old.issued + ' ใบ)');
-    }
+    // แจกไปแล้วก็แก้ได้: ส่วนลด/เงื่อนไขมีผลกับคูปองที่ลูกค้าถืออยู่และยังไม่ได้ใช้ทันที (วันหมดอายุของใบที่แจกแล้วไม่เปลี่ยน)
+    // หน้าเว็บถามยืนยันก่อน · บันทึกค่าเดิม/ค่าใหม่ไว้ในประวัติการแก้ไข
+    if (f && f.maxIssue && f.maxIssue < old.issued) throw bad('max_issue_low', 'จำนวนจำกัดต้องไม่น้อยกว่าที่แจกไปแล้ว (' + old.issued + ' ใบ)');
     return tx(async (db) => {
       let t;
       if (onlyToggle) t = await db.one('UPDATE coupon_templates SET is_active = $2, updated_at = now() WHERE id = $1 RETURNING *', [old.id, !!b.active]);

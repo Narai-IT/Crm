@@ -215,7 +215,7 @@ t('ผู้ใช้หลังบ้าน: admin/admin ต้องเปล
   assert.ok(list.roles.find((r) => r.id === 'cashier'));
 });
 
-t('จัดการคูปอง: แจกอัตโนมัติตามเงื่อนไข · จำกัดจำนวน · วันที่ใช้ได้ · โค้ด · ของขวัญ · รูป · ล็อกมูลค่าหลังแจก', async () => {
+t('จัดการคูปอง: แจกอัตโนมัติตามเงื่อนไข · จำกัดจำนวน · วันที่ใช้ได้ · โค้ด · ของขวัญ · รูป · แก้หลังแจก', async () => {
   const login = await call('POST', '/api/admin/login', { username: 'S003', password: 'demo1234' });
   const adm = { authorization: 'Bearer ' + login.data.token };
   const pos = (b) => call('POST', '/api/pos/transactions', b, posHL01);
@@ -245,11 +245,12 @@ t('จัดการคูปอง: แจกอัตโนมัติตา
   const wrongDay = await pos({ posBillId: 'CP-1', memberId: me, couponIds: [mine[0].id], items: [{ id: 'h1', name: 'ข้าวมันไก่', price: 70, qty: 2 }] });
   assert.equal(wrongDay.data.error, 'coupon_wrong_day');
 
-  // แจกแล้วเปลี่ยนมูลค่าไม่ได้ แต่แก้คำอธิบายได้
-  assert.equal((await call('PATCH', '/api/admin/coupon-templates/' + g.data.id, { ...base, kind: 'general', title: 'ลด 20 ทุกเมนู', type: 'baht', value: 30, maxIssue: 1, useDays: notToday }, adm)).data.error, 'coupon_locked');
-  assert.equal((await call('PATCH', '/api/admin/coupon-templates/' + g.data.id, { ...base, kind: 'general', title: 'ลด 20 ทุกเมนู!', description: 'แก้แล้ว', type: 'baht', value: 20, maxIssue: 1, useDays: 127 }, adm)).status, 200);
+  // แจกแล้วก็แก้ได้: มูลค่าใหม่มีผลกับใบที่ลูกค้าถืออยู่ทันที · จำนวนจำกัดต่ำกว่าที่แจกไปแล้วไม่ได้
+  assert.equal((await call('PATCH', '/api/admin/coupon-templates/' + g.data.id, { ...base, kind: 'general', title: 'ลด 20 ทุกเมนู', type: 'baht', value: 30, maxIssue: 0, useDays: 127 }, adm)).status, 200);
+  assert.equal((await call('PATCH', '/api/admin/coupon-templates/' + g.data.id, { ...base, kind: 'general', title: 'ลด 30 ทุกเมนู', description: 'แก้แล้ว', type: 'baht', value: 30, maxIssue: 1, useDays: 127 }, adm)).status, 200);
+  assert.equal((await call('GET', '/api/liff/coupons?brand=humlai', undefined, asUser)).data.find((c) => c.id === mine[0].id).big, '-30');
   const ok = await pos({ posBillId: 'CP-2', memberId: me, couponIds: [mine[0].id], items: [{ id: 'h1', name: 'ข้าวมันไก่', price: 70, qty: 2 }] });
-  assert.equal(ok.data.discount, 20, JSON.stringify(ok.data));
+  assert.equal(ok.data.discount, 30, JSON.stringify(ok.data));
 
   // ทั่วไปเฉพาะ Platinum: สมาชิกใหม่ไม่ได้
   await call('POST', '/api/admin/coupon-templates', { ...base, kind: 'general', title: 'เฉพาะแพลทินัม', type: 'pct', value: 10, maxDiscount: 50, tier: 'PLATINUM' }, adm);
@@ -274,8 +275,13 @@ t('จัดการคูปอง: แจกอัตโนมัติตา
   assert.equal(cc.status, 200, JSON.stringify(cc.data));
   assert.equal((await call('POST', '/api/liff/coupons/claim', { brand: 'humlai', code: 'HLSUMMER' }, asUser)).status, 200);
   assert.equal((await call('POST', '/api/liff/coupons/claim', { brand: 'humlai', code: 'HLSUMMER' }, asUser)).status, 409);
-  assert.equal((await call('PATCH', '/api/admin/coupon-templates/' + cc.data.id, { active: false }, adm)).status, 200);
+  // เปลี่ยนโค้ดหลังมีคนกรอกแล้ว: โค้ดเดิมใช้ไม่ได้ · คนที่ได้คูปองไปแล้วกรอกโค้ดใหม่ซ้ำไม่ได้ · คนอื่นกรอกโค้ดใหม่ได้
+  assert.equal((await call('PATCH', '/api/admin/coupon-templates/' + cc.data.id, { ...base, kind: 'code', code: 'HLSUMMER2', title: 'โค้ดหน้าร้อน', type: 'baht', value: 20 }, adm)).status, 200);
   assert.equal((await call('POST', '/api/liff/coupons/claim', { brand: 'humlai', code: 'HLSUMMER' }, u2)).status, 400);
+  assert.equal((await call('POST', '/api/liff/coupons/claim', { brand: 'humlai', code: 'HLSUMMER2' }, asUser)).status, 409);
+  assert.equal((await call('POST', '/api/liff/coupons/claim', { brand: 'humlai', code: 'HLSUMMER2' }, u2)).status, 200);
+  assert.equal((await call('PATCH', '/api/admin/coupon-templates/' + cc.data.id, { active: false }, adm)).status, 200);
+  assert.equal((await call('POST', '/api/liff/coupons/claim', { brand: 'humlai', code: 'HLSUMMER2' }, u2)).status, 400);   // ปิดคูปองแล้วโค้ดใช้ไม่ได้
 
   // ของขวัญ: พนักงานมอบให้รายคน
   const gift = await call('POST', '/api/admin/coupon-templates', { ...base, kind: 'gift', title: 'ขอโทษที่รอนาน', type: 'free', value: 40 }, adm);
