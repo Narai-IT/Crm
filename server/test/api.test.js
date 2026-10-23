@@ -887,3 +887,45 @@ t('แลกแต้มที่หน้าร้าน: บอกก่อน
   const ok = await call('POST', '/api/pos/redeem', { memberId: mem, rewardId: rw.data.id, ref: 'rw-bill', subtotal: 320, items: [{ name: 'ข้าวมันไก่ทอด', price: 320, qty: 1 }] }, posHL01);
   assert.equal(ok.status, 200, JSON.stringify(ok.data)); assert.equal(ok.data.coupon.discount, 40);
 });
+
+t('หลายคูปองในบิลเดียว: ชิ้นในบิลใช้ได้กับคูปองใบเดียว · ใบที่บิลเปลี่ยนจนใช้ไม่ได้ถูกปล่อย · ของรางวัลมูลค่า 0 แลกได้', async () => {
+  const adm = { 'x-dev-staff': 'S002' };
+  const base = { brand: 'humlai', kind: 'gift', validity: 'days', days: 30, useDays: 127, active: true, min: 0 };
+  const soup = (await call('POST', '/api/admin/coupon-templates', { ...base, title: 'ฟรีซุป', type: 'free', freeItems: [{ id: 'M4', name: 'ซุปฟักตุ๋น', price: 40 }] }, adm)).data;
+  const ten = (await call('POST', '/api/admin/coupon-templates', { ...base, title: 'ลด 10 บาท', type: 'baht', value: 10 }, adm)).data;
+  const mem = (await call('GET', '/api/admin/members?brand=humlai&size=10', undefined, adm)).data.rows[2].id;
+  const give = async (tpl) => (await call('POST', '/api/admin/members/' + mem + '/coupons', { templateId: tpl }, adm)).data.couponId;
+  const s1 = await give(soup.id); const s2 = await give(soup.id); const t1 = await give(ten.id);
+  const ref = 'multi-1';
+  const one = [{ name: 'ข้าวมันไก่ต้ม', price: 55, qty: 1 }, { name: 'ซุปฟักตุ๋น', price: 40, qty: 1 }];
+  const two = [{ name: 'ข้าวมันไก่ต้ม', price: 55, qty: 1 }, { name: 'ซุปฟักตุ๋น', price: 40, qty: 2 }];
+  const wallet = async (items, subtotal) => (await call('POST', '/api/pos/members/wallet', { memberId: mem, subtotal, ref, items }, posHL01)).data;
+  const reserve = (id, items, subtotal) => call('POST', '/api/pos/coupons/reserve', { memberId: mem, couponId: id, ref, subtotal, items }, posHL01);
+  assert.equal((await reserve(s1, one, 95)).data.coupon.discount, 40);
+  let w = await wallet(one, 95);
+  assert.deepEqual(w.applied.map((x) => x.id), [String(s1)]); assert.equal(w.appliedTotal, 40);
+  const other = w.coupons.find((c) => c.id === String(s2));
+  assert.equal(other.usable, false); assert.match(other.reason, /ถูกใช้กับคูปองอื่นแล้ว/);
+  assert.equal((await reserve(s2, one, 95)).status, 400);
+  assert.equal(w.coupons.find((c) => c.id === String(t1)).discount, 10);           // คูปองลดเงินใช้เพิ่มได้ คิดจากยอดที่เหลือ
+  // ซุป 2 ถ้วย → ใช้คูปองฟรีซุปได้ 2 ใบ + ลด 10
+  assert.equal((await reserve(s2, two, 135)).data.coupon.discount, 40);
+  assert.equal((await reserve(t1, two, 135)).data.coupon.discount, 10);
+  w = await wallet(two, 135);
+  assert.deepEqual(w.applied.map((x) => x.id), [String(s1), String(s2), String(t1)]); assert.equal(w.appliedTotal, 90);
+  // ลดซุปเหลือถ้วยเดียว → ใบที่สองถูกปล่อย
+  w = await wallet(one, 95);
+  assert.deepEqual(w.applied.map((x) => x.id), [String(s1), String(t1)]); assert.equal(w.dropped.length, 1); assert.equal(w.dropped[0].id, String(s2));
+  // บันทึกบิลให้ CRM คิดเอง: ซุป 2 ถ้วย ใช้ 3 ใบ
+  await reserve(s2, two, 135);
+  const sale = await call('POST', '/api/pos/transactions', { posBillId: 'MULTI-1', memberId: mem, couponIds: [s1, s2, t1], couponRef: ref,
+    items: two.map((i, n) => ({ id: String(n + 1), ...i })) }, posHL01);
+  assert.equal(sale.status, 200, JSON.stringify(sale.data)); assert.equal(Number(sale.data.discount), 90);
+  // ของรางวัลมูลค่า 0 (ของที่ระลึก): แลกได้ ไม่ลดเงิน
+  const gift = await call('POST', '/api/admin/rewards', { brand: 'humlai', name: 'ถุงผ้า', cat: 'side', cost: 1, value: 0 }, adm);
+  assert.equal(gift.status, 200, JSON.stringify(gift.data));
+  const r = (await call('POST', '/api/pos/members/wallet', { memberId: mem, subtotal: 95, ref: 'multi-2', items: one }, posHL01)).data.rewards.find((x) => x.id === gift.data.id);
+  assert.equal(r.fits, true, JSON.stringify(r)); assert.equal(r.discount, 0); assert.equal(r.voucher, true);
+  const red = await call('POST', '/api/pos/redeem', { memberId: mem, rewardId: gift.data.id, ref: 'multi-2', subtotal: 95, items: one }, posHL01);
+  assert.equal(red.status, 200, JSON.stringify(red.data)); assert.equal(red.data.coupon.discount, 0);
+});

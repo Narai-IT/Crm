@@ -1,5 +1,6 @@
-// รายการอาหารในบิลจาก POS → ตรวจเงื่อนไขสินค้าของคูปองและคิดส่วนลดของฟรี
+// รายการอาหารในบิลจาก POS → ตรวจเงื่อนไขสินค้าของคูปอง / คิดส่วนลดของฟรี
 // POS หน้าพนักงานไม่มีรหัสเมนูในบิล จึงจับคู่ด้วยชื่อเมนูเป็นหลัก (ใช้ menuId เมื่อ POS ส่งมา) แล้วหาหมวดจากเมนูที่ POS ซิงก์มา
+// ใช้หลายคูปองในบิลเดียว: แต่ละชิ้นในบิลถูกใช้ได้กับคูปองใบเดียว (ของฟรีและชิ้นที่นับเป็นเงื่อนไข) · ใบหลังใช้ได้เฉพาะชิ้นที่เหลือ
 const norm = (s) => String(s || '').trim().replace(/\s+/g, ' ').toLowerCase();
 
 // items: [{ menuId?, name, price (ต่อชิ้น), qty, category? }] · null = POS ไม่ได้ส่งรายการมา
@@ -16,52 +17,62 @@ export async function loadCart(db, brandId, items) {
   }
   return lines;
 }
+// ชิ้นในบิลที่ยังไม่ถูกคูปองใบไหนใช้ (left = จำนวนชิ้นที่เหลือของแต่ละแถว)
+export const makePool = (cart) => (cart ? cart.map((l) => ({ ...l, left: Math.max(1, Math.floor(l.qty)) })) : null);
 
 const hit = (l, r) => (r.type === 'cat' ? !!l.category && l.category === r.id : (l.menuId && l.menuId === r.id) || norm(l.name) === norm(r.name));
 export const hasItemRules = (c) => !!((c.free_items && c.free_items.length) || (c.cond_mode && c.cond_items && c.cond_items.length));
 const names = (list) => list.map((x) => (x.type === 'cat' ? 'หมวด' + x.name : x.name)).join(', ');
 
-// เหตุผลที่บิลนี้ยังไม่เข้าเงื่อนไขสินค้า (null = ผ่าน)
-export function itemProblem(c, cart) {
-  if (!hasItemRules(c)) return null;
-  if (!cart) return { code: 'coupon_needs_items', msg: 'คูปอง ' + c.code + ' ต้องตรวจรายการอาหาร (อัปเดตเครื่อง POS ก่อน)' };
-  if (c.cond_mode && c.cond_items && c.cond_items.length) {
-    const qtyOf = (r) => cart.filter((l) => hit(l, r)).reduce((a, l) => a + l.qty, 0);
-    const missing = c.cond_mode === 'all' ? c.cond_items.filter((r) => qtyOf(r) <= 0) : [];
-    const total = cart.filter((l) => c.cond_items.some((r) => hit(l, r))).reduce((a, l) => a + l.qty, 0);
-    const need = Math.max(1, c.cond_qty || 1);
-    if (missing.length) return { code: 'coupon_items', msg: 'ต้องมี ' + names(missing) + ' ในบิล' };
-    if (total < need) return { code: 'coupon_items', msg: 'ต้องมี ' + names(c.cond_items) + (c.cond_mode === 'all' ? ' (ครบทุกรายการ)' : '') + ' รวมอย่างน้อย ' + need + ' ชิ้นในบิล' };
-  }
+// ตรวจกฎสินค้าของคูปองกับชิ้นที่เหลือ · คืน { problem } หรือ { discount (null = คิดแบบปกติ), take: Map(แถว → จำนวนชิ้นที่ใช้) }
+function tryItems(c, pool) {
+  const take = new Map();
+  const free = (i) => pool[i].left - (take.get(i) || 0);
+  const grab = (i) => take.set(i, (take.get(i) || 0) + 1);
+  // ชิ้นที่ยังว่างของกฎนี้ เรียงจากถูกไปแพง
+  const units = (pred) => pool.flatMap((l, i) => (pred(l) ? Array.from({ length: Math.max(0, free(i)) }, () => i) : [])).sort((a, b) => pool[a].price - pool[b].price);
+  let discount = null;
   if (c.free_items && c.free_items.length) {
-    const has = (f) => cart.some((l) => l.price > 0 && hit(l, f));
-    if (c.free_mode === 'all' && c.free_need_all) {
-      const missing = c.free_items.filter((f) => !has(f));
-      if (missing.length) return { code: 'coupon_items', msg: 'ต้องมี ' + missing.map((f) => f.name).join(', ') + ' ในบิล (ฟรีเมื่อมีครบทุกอย่าง)' };
-    } else if (!c.free_items.some(has)) {
-      return { code: 'coupon_items', msg: 'ต้องมี ' + c.free_items.map((f) => f.name).join(' หรือ ') + ' ในบิลก่อน' };
+    const priced = (f) => (l) => l.price > 0 && hit(l, f);
+    let got = [];
+    if (c.free_mode === 'all') {
+      const missing = [];
+      for (const f of c.free_items) { const u = units(priced(f))[0]; if (u === undefined) missing.push(f); else { grab(u); got.push(u); } }
+      if (c.free_need_all && missing.length) return { problem: { code: 'coupon_items', msg: 'ต้องมี ' + missing.map((f) => f.name).join(', ') + ' ในบิล (ฟรีเมื่อมีครบทุกอย่าง)' } };
+    } else {
+      got = units((l) => l.price > 0 && c.free_items.some((f) => hit(l, f))).slice(0, c.free_mode === 'qty' ? Math.max(1, c.free_qty || 1) : 1);
+      got.forEach(grab);
+    }
+    if (!got.length) return { problem: { code: 'coupon_items', msg: 'ต้องมี ' + c.free_items.map((f) => f.name).join(' หรือ ') + ' ในบิลก่อน' } };
+    discount = Math.round(got.reduce((a, i) => a + pool[i].price, 0) * 100) / 100;
+  }
+  if (c.cond_mode && c.cond_items && c.cond_items.length) {
+    const need = Math.max(1, c.cond_qty || 1); let n = 0;
+    if (c.cond_mode === 'all') {
+      const missing = [];
+      for (const r of c.cond_items) { const u = units((l) => hit(l, r))[0]; if (u === undefined) missing.push(r); else { grab(u); n++; } }
+      if (missing.length) return { problem: { code: 'coupon_items', msg: 'ต้องมี ' + names(missing) + ' ในบิล' } };
+    }
+    const rest = units((l) => c.cond_items.some((r) => hit(l, r)));
+    if (n + rest.length < need) return { problem: { code: 'coupon_items', msg: 'ต้องมี ' + names(c.cond_items) + (c.cond_mode === 'all' ? ' (ครบทุกรายการ)' : '') + ' รวมอย่างน้อย ' + need + ' ชิ้นในบิล' } };
+    // คิดส่วนลดเฉพาะเมนูที่ตรงเงื่อนไข = ใช้ทุกชิ้นที่ตรง · คิดจากทั้งบิล = ใช้แค่ชิ้นที่นับเป็นเงื่อนไข
+    const use = discount === null && c.cond_scope === 'items' ? rest : rest.slice(0, Math.max(0, need - n));
+    use.forEach(grab);
+    if (discount === null && c.cond_scope === 'items') {
+      const base = Math.round([...take].reduce((a, [i, k]) => a + pool[i].price * k, 0) * 100) / 100;
+      discount = c.discount_type === 'pct' ? Math.min(Math.floor(base * Number(c.discount_value) / 100), c.max_discount ? Number(c.max_discount) : Infinity) : Math.min(Number(c.discount_value), base);
     }
   }
-  return null;
+  return { discount, take };
 }
-
-// มูลค่าของฟรีในบิลนี้ · one = ชิ้นที่ถูกที่สุด 1 ชิ้น · qty = รวม N ชิ้น ถูกที่สุดก่อน · all = ทุกเมนูในรายการ อย่างละ 1 ชิ้น (ชิ้นที่ถูกที่สุดของเมนูนั้น)
-function freeAmount(c, cart) {
-  const lines = cart.filter((l) => l.price > 0);
-  if (c.free_mode === 'all') {
-    return Math.round(c.free_items.reduce((a, f) => { const p = lines.filter((l) => hit(l, f)).map((l) => l.price); return a + (p.length ? Math.min(...p) : 0); }, 0) * 100) / 100;
+export function evalItems(c, pool) {
+  if (!hasItemRules(c)) return { discount: null, take: new Map() };
+  if (!pool) return { problem: { code: 'coupon_needs_items', msg: 'คูปอง ' + c.code + ' ต้องตรวจรายการอาหาร (อัปเดตเครื่อง POS ก่อน)' } };
+  const r = tryItems(c, pool);
+  // ถ้าบิลมีเมนูครบแต่ถูกคูปองใบก่อนใช้ไปแล้ว บอกให้ชัด
+  if (r.problem && pool.some((l) => l.left < Math.max(1, Math.floor(l.qty))) && !tryItems(c, makePool(pool)).problem) {
+    return { problem: { code: 'coupon_items_used', msg: r.problem.msg + ' (ชิ้นในบิลถูกใช้กับคูปองอื่นแล้ว)' } };
   }
-  const units = lines.filter((l) => c.free_items.some((f) => hit(l, f))).flatMap((l) => Array(Math.max(1, Math.floor(l.qty))).fill(l.price)).sort((a, b) => a - b);
-  const n = c.free_mode === 'qty' ? Math.max(1, c.free_qty || 1) : 1;
-  return Math.round(units.slice(0, n).reduce((a, p) => a + p, 0) * 100) / 100;
+  return r;
 }
-
-// ส่วนลดของคูปองที่มีกฎสินค้า (เรียกเมื่อ itemProblem ผ่านแล้ว) · null = ไม่มีกฎสินค้า ใช้วิธีคิดปกติ
-export function itemDiscount(c, cart, subtotal) {
-  if (!hasItemRules(c) || !cart) return null;
-  if (c.free_items && c.free_items.length) return Math.min(freeAmount(c, cart), subtotal);
-  if (c.cond_scope !== 'items') return null;
-  const base = Math.min(subtotal, Math.round(cart.filter((l) => c.cond_items.some((r) => hit(l, r))).reduce((a, l) => a + l.price * l.qty, 0) * 100) / 100);
-  if (c.discount_type === 'pct') { const d = Math.floor(base * Number(c.discount_value) / 100); return c.max_discount ? Math.min(d, Number(c.max_discount)) : d; }
-  return Math.min(Number(c.discount_value), base);
-}
+export function consume(pool, take) { if (pool) for (const [i, k] of take) pool[i].left -= k; }

@@ -2,9 +2,9 @@
 // ทุกฟังก์ชันรับ db ที่อยู่ใน transaction (จาก tx()) เพื่อให้ทั้งชุดสำเร็จหรือยกเลิกพร้อมกัน
 import crypto from 'node:crypto';
 import { conflict, bad, notFound, HttpError } from '../http.js';
-import { calcPoints, couponDiscount, memberIdOf, randomCode, sha256, DEV, REQUIRE_OTP, tierOf, checkMemberPin } from '../util.js';
+import { calcPoints, memberIdOf, randomCode, sha256, DEV, REQUIRE_OTP, tierOf, checkMemberPin } from '../util.js';
 import { queueMessage } from './line.js';
-import { loadCart, itemProblem, itemDiscount } from './cart.js';
+import { loadCart, makePool, evalItems, consume } from './cart.js';
 
 // สมาชิกของแบรนด์: สมัครกับแบรนด์ / ผูกกับแบรนด์ / เคยมีแต้มที่แบรนด์ ($1 = แบรนด์)
 export const MEMBER_SCOPE = `(m.joined_brand_id = $1 OR EXISTS (SELECT 1 FROM member_brand_links k WHERE k.member_id = m.id AND k.brand_id = $1)
@@ -355,30 +355,52 @@ const COUPON_CHECK_SQL = `SELECT c.*, t.title, t.badge_big, t.badge_small, t.con
 const bangkokDow = async (db) => (await db.one("SELECT extract(dow FROM now() AT TIME ZONE 'Asia/Bangkok')::int AS d")).d;
 // เหตุผลที่คูปองใช้กับบิลนี้ไม่ได้ (null = ใช้ได้)
 // ส่วนลดของคูปองกับบิลนี้ (ของฟรี/เงื่อนไขสินค้าคิดจากรายการอาหาร · cart = null คือ POS ไม่ได้ส่งรายการมา)
-function couponAmount(c, subtotal, cart) {
-  if (!c || c.status !== 'ready' || subtotal < Number(c.min_spend || 0)) return 0;
-  const d = itemDiscount(c, cart, subtotal);
-  return d === null ? couponDiscount(c, subtotal) : d;
-}
-function couponProblem(c, { memberId, brandId, subtotal, dow, ref, cart }) {
+// ส่วนลดปกติจากยอดที่เหลือในบิล (หลังคูปองใบก่อน)
+const plainDiscount = (c, left) => (c.discount_type === 'pct'
+  ? Math.min(Math.floor(left * Number(c.discount_value) / 100), c.max_discount ? Number(c.max_discount) : Infinity) : Math.min(Number(c.discount_value), left));
+// คูปองมูลค่า 0 ที่ไม่ใช่ของฟรีจากเมนู = ใบรับของ (เช่น ของที่ระลึก) ใช้ได้โดยไม่ลดเงิน
+const isVoucher = (c) => Number(c.discount_value) === 0 && !(c.free_items && c.free_items.length);
+// ตรวจคูปองที่ไม่เกี่ยวกับยอด/รายการในบิล (เจ้าของ สถานะ แบรนด์ วัน การจอง)
+function couponProblem(c, { memberId, brandId, dow, ref }) {
   if (c.member_id !== memberId) return { code: 'coupon_not_owner', msg: 'คูปอง ' + c.code + ' ไม่ใช่ของสมาชิกนี้' };
   if (c.status !== 'ready' || c.expires_at < new Date()) return { code: 'coupon_unusable', status: 409, msg: 'คูปอง ' + c.code + ' ใช้แล้วหรือหมดอายุ' };
   if (c.brand_id && c.brand_id !== brandId) return { code: 'coupon_wrong_brand', msg: 'คูปอง ' + c.code + ' ใช้กับแบรนด์นี้ไม่ได้' };
   if (c.valid_from && c.valid_from > new Date()) return { code: 'coupon_not_started', msg: 'คูปอง ' + c.code + ' ยังไม่ถึงวันที่ใช้ได้' };
   if (!(c.use_days & (1 << dow))) return { code: 'coupon_wrong_day', msg: 'คูปอง ' + c.code + ' ใช้วันนี้ไม่ได้' };
   if (c.reserved_ref && c.reserved_until > new Date() && c.reserved_ref !== ref) return { code: 'coupon_reserved', status: 409, msg: 'คูปอง ' + c.code + ' กำลังถูกใช้กับบิลอื่นอยู่' };
-  const ip = itemProblem(c, cart);
-  if (ip) return ip;
-  if (couponAmount(c, subtotal, cart) <= 0) return { code: 'coupon_min_spend', msg: 'ยอดยังไม่ถึงขั้นต่ำของคูปอง ' + c.code + (Number(c.min_spend) ? ' (ขั้นต่ำ ' + Number(c.min_spend) + ' บาท)' : '') };
   return null;
 }
-const couponOut = (c, err, subtotal, cart) => ({
+// คิดคูปองหลายใบกับบิลเดียวตามลำดับ: ขั้นต่ำเทียบยอดทั้งบิล · ส่วนลดคิดจากยอดที่เหลือ · ชิ้นในบิลใช้ได้กับคูปองใบเดียว
+// ใบที่ใช้ไม่ได้ไม่กินชิ้น/ยอด · คืน [{ c, err, discount }] ตามลำดับเดิม
+export function billCheck(list, { subtotal, cart }) {
+  const pool = makePool(cart); let left = subtotal; const out = [];
+  for (const c of list) {
+    let err = null; let discount = 0;
+    if (subtotal < Number(c.min_spend || 0)) err = { code: 'coupon_min_spend', msg: 'ยอดยังไม่ถึงขั้นต่ำของคูปอง ' + c.code + ' (ขั้นต่ำ ' + Number(c.min_spend) + ' บาท)' };
+    else {
+      const ev = evalItems(c, pool);
+      if (ev.problem) err = ev.problem;
+      else {
+        discount = Math.max(0, Math.min(left, ev.discount === null ? plainDiscount(c, left) : ev.discount));
+        if (discount <= 0 && !isVoucher(c)) err = { code: 'coupon_no_room', msg: 'ยอดที่เหลือในบิลไม่พอสำหรับคูปอง ' + c.code };
+        else { consume(pool, ev.take); left = Math.round((left - discount) * 100) / 100; }
+      }
+    }
+    out.push({ c, err, discount: err ? 0 : discount });
+  }
+  return out;
+}
+export const MAX_COUPONS_PER_BILL = 5;
+const couponOut = (c, err, discount) => ({
   id: String(c.id), code: c.code, title: c.title, big: c.badge_big, small: c.badge_small, cond: c.condition_text, desc: c.description || '',
   image: c.image_id ? '/api/public/coupon-images/' + c.image_id : null, expiresAt: c.expires_at,
-  usable: !err, reason: err ? err.msg : null, discount: err ? 0 : couponAmount(c, subtotal, cart)
+  usable: !err, reason: err ? err.msg : null, discount: err ? 0 : discount, voucher: isVoucher(c)
 });
+// คูปองที่จองไว้กับบิลนี้ ตามลำดับที่กดใช้
+const heldOn = (db, memberId, ref) => (ref ? db.q(COUPON_CHECK_SQL + " WHERE c.member_id = $1 AND c.reserved_ref = $2 AND c.reserved_until > now() AND c.status = 'ready' ORDER BY c.reserved_at NULLS FIRST, c.id", [memberId, ref]) : []);
 
-// กระเป๋าของสมาชิกที่หน้าร้าน: แต้ม + คูปองที่มี (บอกว่าใช้กับบิลนี้ได้ไหม และลดเท่าไร) + ของรางวัลที่แลกได้
+// กระเป๋าของสมาชิกที่หน้าร้าน: แต้ม + คูปองที่ใช้กับบิลนี้แล้ว (applied) + คูปองอื่น (ใช้เพิ่มได้ไหม ลดเท่าไร) + ของรางวัลที่แลกได้
+// คูปองที่ใช้อยู่แต่บิลเปลี่ยนจนใช้ไม่ได้แล้ว ถูกปล่อยและแจ้งใน dropped
 export async function posWallet(db, { memberId, brandId, subtotal, ref, items }) {
   const m = await db.one("SELECT id FROM members WHERE id = $1 AND status = 'active'", [memberId]);
   if (!m) throw notFound('ไม่พบสมาชิก');
@@ -386,40 +408,59 @@ export async function posWallet(db, { memberId, brandId, subtotal, ref, items })
   const balance = (await db.one('SELECT balance FROM wallets WHERE member_id = $1 AND brand_id = $2', [memberId, brandId]))?.balance ?? 0;
   const dow = await bangkokDow(db);
   const sub = Math.max(0, Number(subtotal) || 0);
-  const cs = await db.q(COUPON_CHECK_SQL + " WHERE c.member_id = $1 AND c.status = 'ready' AND c.expires_at > now() AND (c.brand_id = $2 OR c.brand_id IS NULL) ORDER BY c.expires_at", [memberId, brandId]);
   const cart = await loadCart(db, brandId, items);
-  const coupons = cs.map((c) => couponOut(c, couponProblem(c, { memberId, brandId, subtotal: sub, dow, ref, cart }), sub, cart));
-  // ของรางวัล: ตรวจกับบิลนี้ด้วย (ขั้นต่ำ/วันที่ใช้ได้/ของฟรี/เงื่อนไขสินค้า) แลกแล้วจะใช้กับบิลได้ทันที · fits = false ไม่ให้กดแลกเปล่า ๆ
+  const ctx = { memberId, brandId, dow, ref };
+  const held = await heldOn(db, memberId, ref);
+  const heldRes = billCheck(held, { subtotal: sub, cart }).map((x) => ({ ...x, err: couponProblem(x.c, ctx) || x.err }));
+  const dropped = heldRes.filter((x) => x.err);
+  for (const x of dropped) await db.q('UPDATE member_coupons SET reserved_ref = NULL, reserved_until = NULL, reserved_at = NULL WHERE id = $1', [x.c.id]);
+  const kept = heldRes.filter((x) => !x.err).map((x) => x.c);
+  const applied = billCheck(kept, { subtotal: sub, cart }).map((x) => couponOut(x.c, null, x.discount));
+  // ใช้เพิ่มได้ไหม = คิดต่อท้ายคูปองที่ใช้อยู่
+  const extra = (c) => { const err = couponProblem(c, ctx); if (err) return { err, discount: 0 }; const r = billCheck([...kept, c], { subtotal: sub, cart }).pop(); return r; };
+  const full = kept.length >= MAX_COUPONS_PER_BILL ? { code: 'coupon_limit', msg: 'ใช้คูปองได้สูงสุด ' + MAX_COUPONS_PER_BILL + ' ใบต่อบิล' } : null;
+  const cs = await db.q(COUPON_CHECK_SQL + " WHERE c.member_id = $1 AND c.status = 'ready' AND c.expires_at > now() AND (c.brand_id = $2 OR c.brand_id IS NULL) ORDER BY c.expires_at", [memberId, brandId]);
+  const keptIds = new Set(kept.map((c) => c.id));
+  const coupons = cs.filter((c) => !keptIds.has(c.id)).map((c) => { const r = extra(c); const err = r.err || full; return couponOut(c, err, r.discount); });
+  // ของรางวัล: ตรวจกับบิลนี้ด้วย แลกแล้วจะใช้กับบิลได้ทันที · fits = false ไม่ให้กดแลกเปล่า ๆ
   const rw = await rewardsFor(db, { brandId, memberId });
   const tpls = new Map((await db.q(`SELECT id, discount_type, discount_value, min_spend, max_discount, valid_from, use_days, free_items, free_mode, free_qty, free_need_all,
       cond_mode, cond_items, cond_qty, cond_scope FROM coupon_templates WHERE id = ANY($1)`, [rw.map((r) => r.coupon_template_id)])).map((t) => [t.id, t]));
   const rewards = rw.map((r) => {
     const t = tpls.get(r.coupon_template_id);
     const c = t && { ...t, code: '"' + r.name + '"', status: 'ready', member_id: memberId, brand_id: brandId, expires_at: new Date(Date.now() + 864e5), reserved_ref: null };
-    const err = c ? couponProblem(c, { memberId, brandId, subtotal: sub, dow, ref, cart }) : null;
+    const res = c ? extra(c) : { err: null, discount: 0 };
+    const err = res.err || full;
     return { id: r.id, name: r.name, cost: r.points_cost, big: r.badge_big, value: Number(r.discount_value), minSpend: Number(r.min_spend),
       outOfStock: r.stock !== null && r.stock <= 0, why: r.why, affordable: r.points_cost <= balance && !r.why,
-      fits: !err, reason: err ? err.msg : null, discount: c && !err ? couponAmount(c, sub, cart) : 0 };
+      fits: !err, reason: err ? err.msg : null, discount: err ? 0 : res.discount, voucher: c ? isVoucher(c) : false };
   });
-  return { balance, coupons, rewards };
+  return { balance, applied, appliedTotal: Math.round(applied.reduce((a, x) => a + x.discount, 0) * 100) / 100,
+    dropped: dropped.map((x) => ({ id: String(x.c.id), title: x.c.title, reason: x.err.msg })), coupons, rewards, maxCoupons: MAX_COUPONS_PER_BILL };
 }
 
-// จองคูปองไว้กับบิลที่กำลังเปิด (ref) · คืนยอดส่วนลดที่ POS ต้องใช้ (คำนวณที่นี่ที่เดียว ให้ตรงกับตอนบันทึกบิล)
+// จองคูปองเพิ่มกับบิลที่กำลังเปิด (ref) ต่อท้ายใบที่ใช้อยู่ · คืนยอดส่วนลดของใบนี้ (คำนวณที่นี่ที่เดียว ให้ตรงกับตอนบันทึกบิล)
 export async function reserveCoupon(db, { memberId, brandId, couponId, ref, subtotal, minutes = 30, items }) {
   if (!ref) throw bad('ref_required', 'ต้องมีรหัสบิลที่กำลังเปิด');
   const c = await db.one(COUPON_CHECK_SQL + ' WHERE c.id = $1 FOR UPDATE OF c', [parseInt(String(couponId).replace(/\D/g, ''), 10)]);
   if (!c) throw notFound('ไม่พบคูปอง');
   const sub = Math.max(0, Number(subtotal) || 0);
   const cart = await loadCart(db, brandId, items);
-  const err = couponProblem(c, { memberId, brandId, subtotal: sub, dow: await bangkokDow(db), ref, cart });
-  if (err) throw err.status === 409 ? conflict(err.code, err.msg) : bad(err.code, err.msg);
-  // บิลหนึ่งใช้คูปองได้ใบเดียว: ปล่อยใบอื่นที่จองไว้กับบิลนี้
-  await db.q('UPDATE member_coupons SET reserved_ref = NULL, reserved_until = NULL WHERE member_id = $1 AND reserved_ref = $2 AND id <> $3', [memberId, ref, c.id]);
-  await db.q("UPDATE member_coupons SET reserved_ref = $2, reserved_until = now() + make_interval(mins => $3::int) WHERE id = $1", [c.id, ref, Math.min(180, Math.max(5, minutes))]);
-  return couponOut(c, null, sub, cart);
+  const ctx = { memberId, brandId, dow: await bangkokDow(db), ref };
+  const fail = (err) => (err.status === 409 ? conflict(err.code, err.msg) : bad(err.code, err.msg));
+  const p = couponProblem(c, ctx); if (p) throw fail(p);
+  const others = (await heldOn(db, memberId, ref)).filter((x) => x.id !== c.id && !couponProblem(x, ctx));
+  if (c.reserved_ref !== ref && others.length >= MAX_COUPONS_PER_BILL) throw bad('coupon_limit', 'ใช้คูปองได้สูงสุด ' + MAX_COUPONS_PER_BILL + ' ใบต่อบิล');
+  // ใบที่จองไว้แล้วคงลำดับเดิม · ใบใหม่ต่อท้าย
+  const order = c.reserved_ref === ref ? (await heldOn(db, memberId, ref)) : [...others, c];
+  const mine = billCheck(order, { subtotal: sub, cart }).find((x) => x.c.id === c.id);
+  if (mine.err) throw fail(mine.err);
+  await db.q("UPDATE member_coupons SET reserved_ref = $2, reserved_until = now() + make_interval(mins => $3::int), reserved_at = COALESCE(CASE WHEN reserved_ref = $2 THEN reserved_at END, clock_timestamp()) WHERE id = $1",
+    [c.id, ref, Math.min(180, Math.max(5, minutes))]);
+  return couponOut(c, null, mine.discount);
 }
 export async function releaseCoupon(db, { couponId, ref }) {
-  const r = await db.q("UPDATE member_coupons SET reserved_ref = NULL, reserved_until = NULL WHERE id = $1 AND reserved_ref = $2 AND status = 'ready' RETURNING id",
+  const r = await db.q("UPDATE member_coupons SET reserved_ref = NULL, reserved_until = NULL, reserved_at = NULL WHERE id = $1 AND reserved_ref = $2 AND status = 'ready' RETURNING id",
     [parseInt(String(couponId).replace(/\D/g, ''), 10), String(ref || '')]);
   return { released: r.length > 0 };
 }
@@ -475,17 +516,20 @@ export async function recordSale(db, s) {
   if (ids.length) {
     if (!member) throw bad('coupon_needs_member', 'ต้องระบุสมาชิกก่อนใช้คูปอง');
     const dow = await bangkokDow(db);
-    const cs = await db.q(COUPON_CHECK_SQL + ' WHERE c.id = ANY($1::bigint[]) ORDER BY c.id FOR UPDATE OF c', [ids]);
+    // ลำดับตามที่ POS ส่งมา (= ลำดับที่กดใช้) ชิ้นในบิลจึงถูกแบ่งให้คูปองแต่ละใบตรงกับตอนจอง
+    const rows = await db.q(COUPON_CHECK_SQL + ' WHERE c.id = ANY($1::bigint[]) ORDER BY c.id FOR UPDATE OF c', [ids]);
+    const cs = ids.map((id) => rows.find((x) => Number(x.id) === id)).filter(Boolean);
     // รายการในบิล: id ที่ POS ส่งมาเป็นลำดับแถว ไม่ใช่รหัสเมนู จึงใช้เฉพาะ menuId ที่ระบุมาชัด ๆ
     const cart = await loadCart(db, br.brand_id, s.items.map((i) => ({ menuId: i.menuId, name: i.name, price: i.price, qty: i.qty || 1, category: i.category })));
+    const ctx = { memberId: member.id, brandId: br.brand_id, dow, ref: s.couponRef };
+    const okList = [];
     for (const c of cs) {
-      const err = couponProblem(c, { memberId: member.id, brandId: br.brand_id, subtotal: subtotal - discount, dow, ref: s.couponRef, cart });
-      if (err) {
-        if (!lenient) throw err.status === 409 ? conflict(err.code, err.msg) : bad(err.code, err.msg);
-        problems.push(c.code + ': ' + err.msg);
-        continue;
-      }
-      discount += couponAmount(c, subtotal - discount, cart); used.push(c);
+      const err = couponProblem(c, ctx);
+      if (err) { if (!lenient) throw err.status === 409 ? conflict(err.code, err.msg) : bad(err.code, err.msg); problems.push(c.code + ': ' + err.msg); } else okList.push(c);
+    }
+    for (const x of billCheck(okList, { subtotal, cart })) {
+      if (x.err) { if (!lenient) throw x.err.status === 409 ? conflict(x.err.code, x.err.msg) : bad(x.err.code, x.err.msg); problems.push(x.c.code + ': ' + x.err.msg); continue; }
+      discount += x.discount; used.push(x.c);
     }
     if (cs.length < ids.length) problems.push('ไม่พบคูปองบางใบ');
   }
