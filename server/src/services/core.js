@@ -389,9 +389,18 @@ export async function posWallet(db, { memberId, brandId, subtotal, ref, items })
   const cs = await db.q(COUPON_CHECK_SQL + " WHERE c.member_id = $1 AND c.status = 'ready' AND c.expires_at > now() AND (c.brand_id = $2 OR c.brand_id IS NULL) ORDER BY c.expires_at", [memberId, brandId]);
   const cart = await loadCart(db, brandId, items);
   const coupons = cs.map((c) => couponOut(c, couponProblem(c, { memberId, brandId, subtotal: sub, dow, ref, cart }), sub, cart));
-  const rewards = (await rewardsFor(db, { brandId, memberId }))
-    .map((r) => ({ id: r.id, name: r.name, cost: r.points_cost, big: r.badge_big, value: Number(r.discount_value), minSpend: Number(r.min_spend),
-      outOfStock: r.stock !== null && r.stock <= 0, why: r.why, affordable: r.points_cost <= balance && !r.why }));
+  // ของรางวัล: ตรวจกับบิลนี้ด้วย (ขั้นต่ำ/วันที่ใช้ได้/ของฟรี/เงื่อนไขสินค้า) แลกแล้วจะใช้กับบิลได้ทันที · fits = false ไม่ให้กดแลกเปล่า ๆ
+  const rw = await rewardsFor(db, { brandId, memberId });
+  const tpls = new Map((await db.q(`SELECT id, discount_type, discount_value, min_spend, max_discount, valid_from, use_days, free_items, free_mode, free_qty, free_need_all,
+      cond_mode, cond_items, cond_qty, cond_scope FROM coupon_templates WHERE id = ANY($1)`, [rw.map((r) => r.coupon_template_id)])).map((t) => [t.id, t]));
+  const rewards = rw.map((r) => {
+    const t = tpls.get(r.coupon_template_id);
+    const c = t && { ...t, code: '"' + r.name + '"', status: 'ready', member_id: memberId, brand_id: brandId, expires_at: new Date(Date.now() + 864e5), reserved_ref: null };
+    const err = c ? couponProblem(c, { memberId, brandId, subtotal: sub, dow, ref, cart }) : null;
+    return { id: r.id, name: r.name, cost: r.points_cost, big: r.badge_big, value: Number(r.discount_value), minSpend: Number(r.min_spend),
+      outOfStock: r.stock !== null && r.stock <= 0, why: r.why, affordable: r.points_cost <= balance && !r.why,
+      fits: !err, reason: err ? err.msg : null, discount: c && !err ? couponAmount(c, sub, cart) : 0 };
+  });
   return { balance, coupons, rewards };
 }
 

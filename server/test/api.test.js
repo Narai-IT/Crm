@@ -870,3 +870,20 @@ t('ของฟรีหลายรายการ: ฟรี 1 ชิ้น ·
   const w2 = (await call('POST', '/api/pos/members/wallet', { memberId: mem, subtotal: 210, ref: 'free-modes', items: [...cart, { name: 'ข้าวมันไก่ทอด', price: 65, qty: 1 }] }, posHL01)).data.coupons;
   assert.equal(w2.find((x) => x.id === String(ids['ฟรีครบ'])).discount, 130);
 });
+
+t('แลกแต้มที่หน้าร้าน: บอกก่อนว่าของรางวัลใช้กับบิลนี้ได้ไหม · แลกแล้วจองคูปองกับบิลทันที', async () => {
+  const adm = { 'x-dev-staff': 'S002' };
+  const rw = await call('POST', '/api/admin/rewards', { brand: 'humlai', name: 'ลด 40 เมื่อครบ 300', cat: 'discount', type: 'baht', cost: 1, value: 40, min: 300 }, adm);
+  assert.equal(rw.status, 200, JSON.stringify(rw.data));
+  const mem = (await call('GET', '/api/admin/members?brand=humlai&size=5', undefined, adm)).data.rows.find((m) => m.points > 0).id;
+  const wallet = async (subtotal) => (await call('POST', '/api/pos/members/wallet', { memberId: mem, subtotal, ref: 'rw-bill', items: [{ name: 'ข้าวมันไก่ทอด', price: subtotal, qty: 1 }] }, posHL01)).data.rewards.find((r) => r.id === rw.data.id);
+  let r = await wallet(150);
+  assert.equal(r.affordable, true); assert.equal(r.fits, false); assert.match(r.reason, /ขั้นต่ำ 300/);
+  const fail = await call('POST', '/api/pos/redeem', { memberId: mem, rewardId: rw.data.id, ref: 'rw-bill', subtotal: 150 }, posHL01);
+  assert.equal(fail.status, 400);
+  assert.equal((await wallet(150)).affordable, true);                       // แลกไม่สำเร็จ แต้มไม่ถูกตัด
+  r = await wallet(320);
+  assert.equal(r.fits, true); assert.equal(r.discount, 40);
+  const ok = await call('POST', '/api/pos/redeem', { memberId: mem, rewardId: rw.data.id, ref: 'rw-bill', subtotal: 320, items: [{ name: 'ข้าวมันไก่ทอด', price: 320, qty: 1 }] }, posHL01);
+  assert.equal(ok.status, 200, JSON.stringify(ok.data)); assert.equal(ok.data.coupon.discount, 40);
+});
