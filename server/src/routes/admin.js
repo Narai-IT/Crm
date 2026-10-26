@@ -179,9 +179,12 @@ function rewardFields(b) {
   const name = String(b.name || '').trim(); const cost = parseInt(b.cost, 10);
   if (!name || !(cost > 0)) throw bad('reward_invalid', 'ใส่ชื่อรางวัลและแต้มที่ใช้');
   const cat = CATS.includes(b.cat) ? b.cat : 'food';
-  const type = cat === 'discount' && b.type === 'pct' ? 'pct' : 'baht'; const value = Math.max(0, Number(b.value) || 0);
-  if (cat === 'discount' && !(value > 0)) throw bad('reward_invalid', 'รางวัลแบบส่วนลด ต้องใส่มูลค่าส่วนลด');
   const kind = b.kind === 'coupon' ? 'coupon' : 'general';
+  // แบบทั่วไป: ของฟรีเลือกจากเมนู POS (ไม่ใช่หมวดส่วนลด) + เงื่อนไขสินค้าในบิล เหมือนหน้าคูปอง
+  const items = kind === 'general' ? itemRules(cat === 'discount' ? 'none' : 'free', b) : { free: null, freeMode: 'one', freeQty: 1, freeNeedAll: false, condMode: null, condItems: null, condQty: 1, condScope: 'bill' };
+  const type = cat === 'discount' && b.type === 'pct' ? 'pct' : 'baht';
+  const value = items.free ? (items.freeMode === 'all' ? items.free.reduce((a, x) => a + x.price, 0) : Math.max(...items.free.map((x) => x.price)) * items.freeQty) : Math.max(0, Number(b.value) || 0);
+  if (cat === 'discount' && !(value > 0)) throw bad('reward_invalid', 'รางวัลแบบส่วนลด ต้องใส่มูลค่าส่วนลด');
   const templateId = kind === 'coupon' ? parseInt(b.templateId, 10) : null;
   if (kind === 'coupon' && !(templateId > 0)) throw bad('coupon_required', 'เลือกคูปองที่จะให้แลก');
   // ระดับสมาชิกที่แลกได้: ว่างหรือเลือกครบ = ทุกระดับ
@@ -194,8 +197,19 @@ function rewardFields(b) {
   if (startDate && endDate && startDate > endDate) throw bad('dates_invalid', 'วันเริ่มต้องไม่เกินวันหมดอายุ');
   return { name, cost, cat: kind === 'coupon' ? 'coupon' : cat, type, value, min: Math.max(0, Number(b.min) || 0), days: Math.min(365, Math.max(1, parseInt(b.days, 10) || 30)), stock: optInt(b.stock),
     kind, templateId, description: String(b.description || '').trim().slice(0, 1000), imageId: b.imageId ? parseInt(b.imageId, 10) : null,
-    tiers: tiers.length && tiers.length < TIERS.length ? tiers : null, limitCount, limitPeriod, startDate, endDate };
+    tiers: tiers.length && tiers.length < TIERS.length ? tiers : null, limitCount, limitPeriod, startDate, endDate, items };
 }
+// ข้อความเงื่อนไขของฟรี/สินค้าในบิล (ใช้ทั้งคูปองและของรางวัล)
+function itemText(items) {
+  return [items.free ? 'ฟรี ' + (items.freeMode === 'all' ? items.free.map((x) => x.name).join(' + ') + ' อย่างละ 1 ชิ้น' + (items.freeNeedAll ? ' (ต้องมีครบทุกอย่างในบิล)' : ' (เฉพาะที่มีในบิล)')
+    : items.free.map((x) => x.name).join(' / ') + (items.freeMode === 'qty' ? ' รวม ' + items.freeQty + ' ชิ้น' : ' 1 ชิ้น') + ' (ต้องมีในบิล)') : '',
+  items.condMode ? 'ต้องมี ' + items.condItems.map((x) => (x.type === 'cat' ? 'หมวด' : '') + x.name).join(items.condMode === 'all' ? ' และ ' : ' หรือ ') + (items.condQty > 1 ? ' รวม ' + items.condQty + ' ชิ้นขึ้นไป' : '') + ' ในบิล' : ''].filter(Boolean);
+}
+// เทียบกฎสินค้าของแม่แบบเดิมกับค่าใหม่ (เปลี่ยน = สร้างแม่แบบใหม่ให้ของรางวัล)
+const itemKey = (x) => JSON.stringify([(x.free || []).map((f) => f.id), x.free ? x.freeMode : 'one', x.free && x.freeMode === 'qty' ? x.freeQty : 1, !!(x.free && x.freeNeedAll),
+  x.condMode || null, (x.condItems || []).map((c) => c.type + ':' + c.id), x.condMode ? x.condQty : 1, x.condMode ? x.condScope : 'bill']);
+const tplItems = (t) => ({ free: t.free_items && t.free_items.length ? t.free_items : null, freeMode: t.free_mode || 'one', freeQty: t.free_qty || 1, freeNeedAll: !!t.free_need_all,
+  condMode: t.cond_mode || null, condItems: t.cond_items, condQty: t.cond_qty || 1, condScope: t.cond_scope || 'bill' });
 const TIERS = TIER_KEYS;
 const PERIODS = ['day', 'week', 'month', 'year', 'all'];
 // ของรางวัลแบบคูปอง: ต้องเป็นคูปองของแบรนด์เดียวกันที่สร้างในเมนูคูปอง (ไม่ใช่คูปองภายในของรางวัลอื่น)
@@ -208,14 +222,17 @@ const REWARD_COLS = 'name = $2, category = $3, points_cost = $4, stock = $5, is_
 const rewardArgs = (f) => [f.name, f.cat, f.cost, f.stock];
 const rewardExtra = (f) => [f.kind, f.description, f.imageId, f.tiers, f.limitCount, f.limitPeriod, f.startDate, f.endDate];
 // รางวัลแบบของฟรี: คูปองลดเท่าราคาของชิ้นนั้น (value) · แบบส่วนลด: ลดตามที่ตั้ง
-const rewardTemplate = (f) => f.cat === 'discount'
-  ? { title: f.name, big: f.type === 'pct' ? '-' + f.value + '%' : '-' + f.value, small: f.type === 'pct' ? 'ส่วนลด' : 'บาท', cond: 'แลกด้วย ' + f.cost + ' แต้ม' + (f.min ? ' · ซื้อครบ ' + f.min + ' บาท' : ''), type: f.type, value: f.value, min: f.min, days: f.days }
-  : { title: f.name, big: 'ฟรี', small: 'แลกแต้ม', cond: 'แลกด้วย ' + f.cost + ' แต้ม', type: 'baht', value: f.value, min: f.min, days: f.days };
+const rewardTemplate = (f) => (f.cat === 'discount'
+  ? { title: f.name, big: f.type === 'pct' ? '-' + f.value + '%' : '-' + f.value, small: f.type === 'pct' ? 'ส่วนลด' : 'บาท', cond: ['แลกด้วย ' + f.cost + ' แต้ม', ...itemText(f.items), f.min ? 'ซื้อครบ ' + f.min + ' บาท' : ''].filter(Boolean).join(' · '), type: f.type, value: f.value, min: f.min, days: f.days, items: f.items }
+  : { title: f.name, big: 'ฟรี', small: 'แลกแต้ม', cond: ['แลกด้วย ' + f.cost + ' แต้ม', ...itemText(f.items), f.min ? 'ซื้อครบ ' + f.min + ' บาท' : ''].filter(Boolean).join(' · '), type: 'baht', value: f.value, min: f.min, days: f.days, items: f.items });
 async function newTemplate(db, brandId, t) {
   const big = t.big || (t.type === 'pct' ? '-' + t.value + '%' : '-' + t.value);
   const small = t.small || (t.type === 'pct' ? 'ส่วนลด' : 'บาท');
-  return (await db.one(`INSERT INTO coupon_templates (brand_id, title, badge_big, badge_small, condition_text, discount_type, discount_value, min_spend, valid_days)
-    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id`, [brandId, t.title, big, small, t.cond || '', t.type, t.value, t.min || 0, t.days || 30])).id;
+  const i = t.items || {};
+  return (await db.one(`INSERT INTO coupon_templates (brand_id, title, badge_big, badge_small, condition_text, discount_type, discount_value, min_spend, valid_days,
+      free_items, free_mode, free_qty, free_need_all, cond_mode, cond_items, cond_qty, cond_scope)
+    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17) RETURNING id`, [brandId, t.title, big, small, t.cond || '', t.type, t.value, t.min || 0, t.days || 30,
+    i.free ? JSON.stringify(i.free) : null, i.freeMode || 'one', i.freeQty || 1, !!i.freeNeedAll, i.condMode || null, i.condItems ? JSON.stringify(i.condItems) : null, i.condQty || 1, i.condScope || 'bill'])).id;
 }
 
 // กลุ่มเป้าหมายแคมเปญ: ต้องติดตาม OA ของแบรนด์ + ยินยอมรับข่าวสารของแบรนด์นั้นเสมอ
@@ -573,6 +590,7 @@ export default function (r) {
     const s = await staffUser(req); requirePage(s, 'rewards');
     return q(`SELECT r.*, to_char(r.start_date, 'YYYY-MM-DD') AS start_day, to_char(r.end_date, 'YYYY-MM-DD') AS end_day,
       t.discount_type, t.discount_value, t.min_spend, t.valid_days, t.title AS coupon_title,
+      t.free_items, t.free_mode, t.free_qty, t.free_need_all, t.cond_mode, t.cond_items, t.cond_qty, t.cond_scope,
       (SELECT count(*) FROM point_ledger l WHERE l.entry_type = 'redeem' AND l.ref_type = 'reward' AND l.ref_id = r.id::text)::int AS redeemed
       FROM rewards r JOIN coupon_templates t ON t.id = r.coupon_template_id WHERE r.brand_id = ANY($1) ORDER BY r.brand_id, r.is_active DESC, r.points_cost`, [s.brands]);
   });
@@ -590,7 +608,8 @@ export default function (r) {
   // แก้รางวัล: ถ้าเปลี่ยนชื่อ/ส่วนลด จะสร้างแม่แบบคูปองใหม่ คูปองที่ลูกค้าแลกไปแล้วยังใช้ตามเงื่อนไขเดิม
   r.patch('/api/admin/rewards/:id', async (req, b, _u, p) => {
     const s = await staffUser(req); requirePage(s, 'rewards');
-    const rw = await one(`SELECT r.*, to_char(r.start_date, 'YYYY-MM-DD') AS start_day, to_char(r.end_date, 'YYYY-MM-DD') AS end_day, t.discount_type, t.discount_value, t.min_spend, t.valid_days
+    const rw = await one(`SELECT r.*, to_char(r.start_date, 'YYYY-MM-DD') AS start_day, to_char(r.end_date, 'YYYY-MM-DD') AS end_day, t.discount_type, t.discount_value, t.min_spend, t.valid_days,
+      t.free_items, t.free_mode, t.free_qty, t.free_need_all, t.cond_mode, t.cond_items, t.cond_qty, t.cond_scope
       FROM rewards r JOIN coupon_templates t ON t.id = r.coupon_template_id WHERE r.id = $1`, [parseInt(p.id.replace(/\D/g, ''), 10)]);
     if (!rw) throw notFound(); requireBrand(s, rw.brand_id);
     const kept = (k, v) => (k in b ? b[k] : v);
@@ -600,13 +619,16 @@ export default function (r) {
       stock: kept('stock', rw.stock), kind: b.kind ?? rw.kind, templateId: b.templateId ?? rw.coupon_template_id,
       description: kept('description', rw.description), imageId: kept('imageId', rw.image_id), tiers: kept('tiers', rw.tiers || undefined),
       limitCount: kept('limitCount', rw.limit_count), limitPeriod: b.limitPeriod ?? rw.limit_period,
-      startDate: kept('startDate', rw.start_day), endDate: kept('endDate', rw.end_day)
+      startDate: kept('startDate', rw.start_day), endDate: kept('endDate', rw.end_day),
+      freeItems: b.freeItems ?? rw.free_items, freeMode: b.freeMode ?? rw.free_mode, freeQty: b.freeQty ?? rw.free_qty, freeNeedAll: b.freeNeedAll ?? rw.free_need_all,
+      condMode: b.condMode ?? rw.cond_mode, condItems: b.condItems ?? rw.cond_items, condQty: b.condQty ?? rw.cond_qty, condScope: b.condScope ?? rw.cond_scope
     });
     return tx(async (db) => {
       let tpl;
       if (f.kind === 'coupon') tpl = await couponForReward(db, rw.brand_id, f.templateId);
       else {
-        const changed = rw.kind !== 'general' || f.name !== rw.name || f.cat !== rw.category || f.value !== Number(rw.discount_value) || f.type !== rw.discount_type || f.min !== Number(rw.min_spend) || f.days !== rw.valid_days;
+        const changed = rw.kind !== 'general' || f.name !== rw.name || f.cat !== rw.category || f.value !== Number(rw.discount_value) || f.type !== rw.discount_type || f.min !== Number(rw.min_spend) || f.days !== rw.valid_days
+          || itemKey(f.items) !== itemKey(tplItems(rw));
         tpl = changed ? await newTemplate(db, rw.brand_id, rewardTemplate(f)) : rw.coupon_template_id;
       }
       const out = await db.one('UPDATE rewards SET ' + REWARD_COLS + ' WHERE id = $1 RETURNING *', [rw.id, ...rewardArgs(f), b.active ?? null, tpl, ...rewardExtra(f)]);

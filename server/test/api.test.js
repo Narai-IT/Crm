@@ -929,3 +929,29 @@ t('หลายคูปองในบิลเดียว: ชิ้นใน
   const red = await call('POST', '/api/pos/redeem', { memberId: mem, rewardId: gift.data.id, ref: 'multi-2', subtotal: 95, items: one }, posHL01);
   assert.equal(red.status, 200, JSON.stringify(red.data)); assert.equal(red.data.coupon.discount, 0);
 });
+
+t('ของรางวัลแบบทั่วไป: เลือกของฟรีจากเมนู POS + เงื่อนไขสินค้า เหมือนคูปอง', async () => {
+  const adm = { 'x-dev-staff': 'S002' };
+  const rw = await call('POST', '/api/admin/rewards', { brand: 'humlai', name: 'แลกฟรีเก๊กฮวยหรือซุป', cat: 'drink', cost: 1, kind: 'general',
+    freeItems: [{ id: 'M3', name: 'น้ำเก๊กฮวย', price: 25 }, { id: 'M4', name: 'ซุปฟักตุ๋น', price: 40 }], freeMode: 'one' }, adm);
+  assert.equal(rw.status, 200, JSON.stringify(rw.data));
+  let list = (await call('GET', '/api/admin/rewards', undefined, adm)).data.find((x) => x.id === rw.data.id);
+  assert.equal(list.free_items.length, 2); assert.equal(Number(list.discount_value), 40);
+  const mem = (await call('GET', '/api/admin/members?brand=humlai&size=10', undefined, adm)).data.rows.find((m) => m.points > 0).id;
+  const r = async (items, subtotal) => (await call('POST', '/api/pos/members/wallet', { memberId: mem, subtotal, ref: 'rw-items', items }, posHL01)).data.rewards.find((x) => x.id === rw.data.id);
+  let x = await r([{ name: 'ข้าวมันไก่ต้ม', price: 55, qty: 1 }], 55);
+  assert.equal(x.fits, false); assert.match(x.reason, /น้ำเก๊กฮวย หรือ ซุปฟักตุ๋น/);
+  x = await r([{ name: 'ข้าวมันไก่ต้ม', price: 55, qty: 1 }, { name: 'ซุปฟักตุ๋น', price: 40, qty: 1 }], 95);
+  assert.equal(x.fits, true); assert.equal(x.discount, 40);
+  // แก้เป็นฟรีทุกเมนู + ต้องมีข้าวมันไก่ 2 จาน → สร้างแม่แบบใหม่
+  const old = list.coupon_template_id;
+  const up = await call('PATCH', '/api/admin/rewards/' + rw.data.id, { freeMode: 'all', condMode: 'any', condItems: [{ type: 'item', id: 'M1', name: 'ข้าวมันไก่ต้ม' }], condQty: 2 }, adm);
+  assert.equal(up.status, 200, JSON.stringify(up.data)); assert.notEqual(up.data.coupon_template_id, old);
+  x = await r([{ name: 'ข้าวมันไก่ต้ม', price: 55, qty: 1 }, { name: 'ซุปฟักตุ๋น', price: 40, qty: 1 }, { name: 'น้ำเก๊กฮวย', price: 25, qty: 1 }], 120);
+  assert.equal(x.fits, false); assert.match(x.reason, /รวมอย่างน้อย 2 ชิ้น/);
+  x = await r([{ name: 'ข้าวมันไก่ต้ม', price: 55, qty: 2 }, { name: 'ซุปฟักตุ๋น', price: 40, qty: 1 }, { name: 'น้ำเก๊กฮวย', price: 25, qty: 1 }], 175);
+  assert.equal(x.fits, true); assert.equal(x.discount, 65);
+  // แก้แค่ชื่อเล่น ๆ ไม่เปลี่ยนกฎ → ใช้แม่แบบเดิม (แต่ชื่อเปลี่ยนก็สร้างใหม่ตามเดิม) · ปิดแลกไม่สร้างแม่แบบใหม่
+  const off = await call('PATCH', '/api/admin/rewards/' + rw.data.id, { active: false }, adm);
+  assert.equal(off.data.coupon_template_id, up.data.coupon_template_id);
+});
