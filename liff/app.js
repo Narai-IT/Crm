@@ -142,7 +142,9 @@
     return '<div class="coupon' + (usable ? '' : ' off') + (c.image ? ' has-img' : '') + '">' + head + '<div class="in"><b>' + esc(c.title) + '</b>' +
       (c.desc ? '<small class="desc">' + esc(c.desc) + '</small>' : '') + '<small>' + esc(c.cond) + '</small>' +
       '<small style="color:' + (usable ? 'var(--ai)' : 'var(--muted)') + ';font-weight:600">' + (c.status === 'used' ? 'ใช้แล้ว ' + (c.usedAt ? date(c.usedAt) : '') : c.status === 'expired' ? 'หมดอายุแล้ว' : notYet ? 'เริ่มใช้ได้ ' + date(c.validFrom) + ' · ' + left(c.expiresAt) : left(c.expiresAt)) + '</small>' +
-      (usable && !notYet ? '<button class="btn sm" style="align-self:flex-start;margin-top:6px" data-a="code" data-v="' + c.id + '">' + (show ? 'ซ่อน' : 'ใช้คูปอง') + '</button>' : '') +
+      (usable && !notYet ? '<div class="cbtns"><button class="btn sm" data-a="code" data-v="' + c.id + '">' + (show ? 'ซ่อน' : 'ใช้คูปอง') + '</button>' +
+        (c.cancel ? '<button class="btn sm ghost" data-a="cancelAsk" data-v="' + c.id + '">ยกเลิกการแลก คืน ' + fmt(c.cancel.restore) + ' แต้ม</button>' : '') + '</div>'
+        : usable && c.cancel ? '<div class="cbtns"><button class="btn sm ghost" data-a="cancelAsk" data-v="' + c.id + '">ยกเลิกการแลก คืน ' + fmt(c.cancel.restore) + ' แต้ม</button></div>' : '') +
       (show ? '<div class="code">' + couponQr(c.code) + '<small>ให้พนักงานสแกน QR นี้ · ใช้คูปองและสะสมแต้มในครั้งเดียว</small><br><b>' + esc(c.code) + '</b></div>' : '') + '</div></div>';
   }
 
@@ -254,6 +256,14 @@
     const titles = { home: 'บัตรสมาชิก', coupons: 'คูปองของฉัน', rewards: 'แลกแต้ม', history: 'ประวัติ', profile: 'ข้อมูลของฉัน' };
     const views = { home: homeView, coupons: couponsView, rewards: rewardsView, history: historyView, profile: profileView };
     let sheet = '';
+    if (S.cancelId) {
+      const c = (S.coupons || []).find((x) => String(x.id) === String(S.cancelId));
+      if (c && c.cancel) {
+        sheet = '<div class="scrim" data-a="cancelNo"></div><div class="sheet" role="dialog" aria-label="ยืนยันยกเลิกการแลก"><h3>ยกเลิกการแลก "' + esc(c.title) + '"?</h3>' +
+          '<span class="muted">คืน <b>' + fmt(c.cancel.restore) + ' แต้ม</b> เข้าบัตรทันที' + (c.cancel.lost ? ' (อีก ' + fmt(c.cancel.lost) + ' แต้มหมดอายุไปแล้ว คืนไม่ได้)' : '') + ' · แต้มที่คืนมีวันหมดอายุเดิม<br>คูปองใบนี้จะใช้ไม่ได้แล้ว · แลกใหม่ได้ภายหลังถ้าของรางวัลยังเปิดแลกอยู่</span>' +
+          '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px"><button class="btn ghost" data-a="cancelNo">ไม่ยกเลิก</button><button class="btn" data-a="cancelDo">ยกเลิก คืนแต้ม</button></div></div>';
+      }
+    }
     if (S.pick) {
       const r = S.rewards.find((x) => String(x.id) === String(S.pick)); const bal = S.me.wallets[S.brand].balance;
       sheet = '<div class="scrim" data-a="unpick"></div><div class="sheet" role="dialog" aria-label="ยืนยันการแลก"><h3>ยืนยันแลก ' + esc(r.name) + '?</h3><span class="muted">ใช้ ' + fmt(r.points_cost) + ' แต้ม · คงเหลือ ' + fmt(bal - r.points_cost) + ' แต้ม · ได้รับเป็นคูปอง' + (r.kind === 'coupon' ? '' : 'ใช้ได้ ' + (r.valid_days || 30) + ' วัน') + '</span>' +
@@ -280,6 +290,13 @@
     rcat: (v) => { S.rcat = v; render(); },
     pick: (v) => { S.pick = v; render(); },
     unpick: () => { S.pick = null; render(); },
+    cancelAsk: (v) => { S.cancelId = v; render(); },
+    cancelNo: () => { S.cancelId = null; render(); },
+    cancelDo: async () => {
+      const id = S.cancelId; S.cancelId = null;
+      const r = await api('POST', '/api/liff/coupons/' + encodeURIComponent(id) + '/cancel', {});
+      toast('ยกเลิกการแลกแล้ว คืน ' + fmt(r.restored) + ' แต้ม'); S.showCode = null; await refresh();
+    },
     redeem: async () => {
       const id = S.pick; S.pick = null;
       const key = 'rdm-' + Date.now() + '-' + Math.random().toString(36).slice(2);

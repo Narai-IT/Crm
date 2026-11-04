@@ -955,3 +955,44 @@ t('ของรางวัลแบบทั่วไป: เลือกขอ
   const off = await call('PATCH', '/api/admin/rewards/' + rw.data.id, { active: false }, adm);
   assert.equal(off.data.coupon_template_id, up.data.coupon_template_id);
 });
+
+t('ยกเลิกการแลกแต้ม: คืนแต้มเข้าก้อนเดิม (วันหมดอายุเดิม) · ก้อนที่หมดอายุไม่คืน · คืนสต็อกและสิทธิ์แลก', async () => {
+  const adm = { 'x-dev-staff': 'S002' };
+  const rw = (await call('POST', '/api/admin/rewards', { brand: 'humlai', name: 'ถุงทดสอบยกเลิก', cat: 'side', cost: 30, value: 0, stock: 5, limitCount: 1, limitPeriod: 'day' }, adm)).data;
+  const mem = (await call('GET', '/api/admin/members?brand=humlai&size=20', undefined, adm)).data.rows.find((m) => m.points >= 60).id;
+  const lotsOf = () => mods.db.q("SELECT id, remaining, expires_at FROM point_lots WHERE member_id = $1 AND brand_id = 'humlai' ORDER BY id", [mem]);
+  const before = await lotsOf();
+  const bal0 = (await call('GET', '/api/admin/members/' + mem + '?brand=humlai', undefined, adm)).data.wallets.humlai.balance;
+  const red = await call('POST', '/api/pos/redeem', { memberId: mem, rewardId: rw.id, ref: 'cancel-1', subtotal: 100, items: [{ name: 'ข้าวมันไก่ต้ม', price: 100, qty: 1 }] }, posHL01);
+  assert.equal(red.status, 200, JSON.stringify(red.data));
+  const cid = red.data.coupon.id;
+  // แลกได้วันละครั้ง · สต็อกลด
+  let w = (await call('POST', '/api/pos/members/wallet', { memberId: mem, subtotal: 100, ref: 'cancel-1', items: [] }, posHL01)).data;
+  assert.equal(w.rewards.find((r) => r.id === rw.id).why !== null, true);
+  const ap = w.applied.find((x) => x.id === String(cid));
+  assert.deepEqual(ap.cancel, { cost: 30, restore: 30, lost: 0 });
+  // ยกเลิกที่ POS: คืน 30 แต้ม เข้าก้อนเดิม วันหมดอายุเดิม
+  const can = await call('POST', '/api/pos/coupons/cancel-redeem', { memberId: mem, couponId: cid }, posHL01);
+  assert.equal(can.status, 200, JSON.stringify(can.data)); assert.equal(can.data.restored, 30); assert.equal(can.data.balance, bal0);
+  const after = await lotsOf();
+  assert.deepEqual(after.map((l) => [l.id, l.remaining, String(l.expires_at)]), before.map((l) => [l.id, l.remaining, String(l.expires_at)]));
+  w = (await call('POST', '/api/pos/members/wallet', { memberId: mem, subtotal: 100, ref: 'cancel-1', items: [] }, posHL01)).data;
+  assert.equal(w.applied.length, 0);
+  const again = w.rewards.find((r) => r.id === rw.id); assert.equal(again.why, null);            // สิทธิ์แลกวันละครั้งกลับมา
+  assert.equal((await call('GET', '/api/admin/rewards', undefined, adm)).data.find((r) => r.id === rw.id).stock, 5);
+  assert.equal((await call('POST', '/api/pos/coupons/cancel-redeem', { memberId: mem, couponId: cid }, posHL01)).status, 409);   // ยกเลิกซ้ำไม่ได้
+  // แลกอีกครั้ง แล้วทำให้ก้อนแรกที่ถูกใช้หมดอายุ → คืนเฉพาะส่วนที่ยังไม่หมดอายุ (ยกเลิกจากหลังบ้าน)
+  const red2 = await call('POST', '/api/pos/redeem', { memberId: mem, rewardId: rw.id, ref: 'cancel-2', subtotal: 100, items: [] }, posHL01);
+  assert.equal(red2.status, 200, JSON.stringify(red2.data));
+  const uses = await mods.db.q('SELECT u.lot_id, u.points FROM point_lot_uses u JOIN member_coupons c ON c.source_ref = u.ledger_id::text WHERE c.id = $1 ORDER BY u.lot_id', [red2.data.coupon.id]);
+  assert.equal(uses.reduce((a, u) => a + u.points, 0), 30);
+  await mods.db.q("UPDATE point_lots SET expires_at = now() - interval '1 day' WHERE id = $1", [uses[0].lot_id]);
+  const det = (await call('GET', '/api/admin/members/' + mem + '?brand=humlai', undefined, adm)).data.coupons.find((c) => c.id === String(red2.data.coupon.id));
+  assert.equal(det.cancel.restore, 30 - uses[0].points); assert.equal(det.cancel.lost, uses[0].points);
+  const can2 = await call('POST', '/api/admin/members/' + mem + '/coupons/' + red2.data.coupon.id + '/cancel', {}, adm);
+  assert.equal(can2.status, 200, JSON.stringify(can2.data)); assert.equal(can2.data.restored, 30 - uses[0].points); assert.equal(can2.data.lost, uses[0].points);
+  // คูปองที่ไม่ได้มาจากการแลก ยกเลิกไม่ได้
+  const gift = (await call('POST', '/api/admin/coupon-templates', { brand: 'humlai', kind: 'gift', title: 'ของขวัญยกเลิกไม่ได้', type: 'baht', value: 5, validity: 'days', days: 30, useDays: 127, active: true }, adm)).data;
+  const gid = (await call('POST', '/api/admin/members/' + mem + '/coupons', { templateId: gift.id }, adm)).data.couponId;
+  assert.equal((await call('POST', '/api/pos/coupons/cancel-redeem', { memberId: mem, couponId: gid }, posHL01)).status, 400);
+});

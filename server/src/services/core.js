@@ -52,12 +52,13 @@ export async function debit(db, e) {
     if (!e.capAtBalance) throw conflict('insufficient_points', 'แต้มไม่พอ');
     pts = w.balance;
   }
-  let left = pts;
+  let left = pts; const uses = [];
   const lots = await db.q('SELECT id, remaining FROM point_lots WHERE member_id = $1 AND brand_id = $2 AND remaining > 0 ORDER BY expires_at NULLS LAST, id FOR UPDATE', [e.memberId, e.brandId]);
   for (const l of lots) {
     if (left <= 0) break;
     const take = Math.min(l.remaining, left);
     await db.q('UPDATE point_lots SET remaining = remaining - $2 WHERE id = $1', [l.id, take]);
+    uses.push([l.id, take]);
     left -= take;
   }
   const balance = w.balance - pts;
@@ -66,6 +67,8 @@ export async function debit(db, e) {
      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING id`,
     [e.memberId, e.brandId, e.branchId || null, e.type, -pts, balance, e.refType || null, e.refId || null, e.key, e.note || null, e.actorType, e.actorId || null]);
   await db.q('UPDATE wallets SET balance = $3, updated_at = now() WHERE member_id = $1 AND brand_id = $2', [e.memberId, e.brandId, balance]);
+  // จดก้อนแต้มที่ใช้ (ยกเลิกการแลกคืนเข้าก้อนเดิมได้)
+  for (const [lot, n] of uses) await db.q('INSERT INTO point_lot_uses (ledger_id, lot_id, points) VALUES ($1,$2,$3)', [led.id, lot, n]);
   return { ledgerId: led.id, balance, points: pts };
 }
 
@@ -74,7 +77,7 @@ export async function walletsOf(db, memberId) {
   const rows = await db.q(
     `SELECT b.id AS brand_id, COALESCE(w.balance, 0) AS balance,
             COALESCE((SELECT sum(points) FROM point_ledger l WHERE l.member_id = $1 AND l.brand_id = b.id AND l.points > 0
-                      AND l.entry_type <> 'merge' AND l.created_at > now() - interval '365 days'), 0) AS earned_12m,
+                      AND l.entry_type NOT IN ('merge', 'refund') AND l.created_at > now() - interval '365 days'), 0) AS earned_12m,
             (SELECT min(expires_at) FROM point_lots p WHERE p.member_id = $1 AND p.brand_id = b.id AND p.remaining > 0) AS next_expiry
        FROM brands b LEFT JOIN wallets w ON w.brand_id = b.id AND w.member_id = $1 WHERE b.is_active ORDER BY b.id`, [memberId]);
   const out = {};
@@ -293,7 +296,9 @@ const REWARD_OPEN = `r.is_active AND (r.start_date IS NULL OR r.start_date <= (n
 // จำนวนครั้งที่สมาชิกแลกรางวัลนี้ในช่วงเวลาที่จำกัด (วัน/สัปดาห์/เดือน/ปี ตามเวลาไทย หรือทั้งหมด)
 async function redeemedCount(db, memberId, r) {
   const since = r.limit_period === 'all' ? '' : ` AND created_at >= date_trunc('${r.limit_period}', now() AT TIME ZONE 'Asia/Bangkok') AT TIME ZONE 'Asia/Bangkok'`;
-  return (await db.one(`SELECT count(*)::int AS n FROM point_ledger WHERE member_id = $1 AND entry_type = 'redeem' AND ref_type = 'reward' AND ref_id = $2${since}`, [memberId, String(r.id)])).n;
+  // การแลกที่ยกเลิกแล้ว (คูปอง void) ไม่นับ
+  return (await db.one(`SELECT count(*)::int AS n FROM point_ledger WHERE member_id = $1 AND entry_type = 'redeem' AND ref_type = 'reward' AND ref_id = $2${since}
+    AND NOT EXISTS (SELECT 1 FROM member_coupons mc WHERE mc.source = 'redeem' AND mc.source_ref = point_ledger.id::text AND mc.status = 'void')`, [memberId, String(r.id)])).n;
 }
 // เหตุผลที่สมาชิกคนนี้แลกรางวัลนี้ไม่ได้ (null = แลกได้ ถ้าแต้มพอ) · tier = ระดับปัจจุบันของสมาชิก
 async function rewardProblem(db, r, { memberId, tier }) {
@@ -316,6 +321,51 @@ export async function rewardsFor(db, { brandId, memberId }) {
     out.push({ ...r, why: p ? p.msg : null });
   }
   return out;
+}
+
+// ยกเลิกการแลกได้ไหม + จะคืนกี่แต้ม (คูปองจากการแลกที่ยังไม่ใช้และยังไม่หมดอายุ)
+// คืนเข้าก้อนเดิมตามวันหมดอายุเดิม · ก้อนที่หมดอายุไปแล้วไม่คืน · แลกก่อนมีการจดก้อน (ไม่มี point_lot_uses) คืนเป็นก้อนใหม่ตามกฎแต้ม
+export async function cancelInfo(db, coupons) {
+  const list = coupons.filter((c) => c.source === 'redeem' && c.status === 'ready' && new Date(c.expires_at) > new Date() && /^\d+$/.test(String(c.source_ref || '')));
+  const out = new Map();
+  if (!list.length) return out;
+  const led = await db.q("SELECT id, -points AS cost FROM point_ledger WHERE id = ANY($1::bigint[]) AND entry_type = 'redeem'", [list.map((c) => c.source_ref)]);
+  const uses = await db.q('SELECT u.ledger_id, u.points, (l.expires_at IS NULL OR l.expires_at > now()) AS alive FROM point_lot_uses u JOIN point_lots l ON l.id = u.lot_id WHERE u.ledger_id = ANY($1::bigint[])', [led.map((l) => l.id)]);
+  for (const c of list) {
+    const l = led.find((x) => String(x.id) === String(c.source_ref)); if (!l) continue;
+    const mine = uses.filter((u) => String(u.ledger_id) === String(l.id));
+    const restore = mine.length ? mine.filter((u) => u.alive).reduce((a, u) => a + u.points, 0) : l.cost;
+    out.set(String(c.id), { cost: l.cost, restore, lost: l.cost - restore });
+  }
+  return out;
+}
+export async function cancelRedeem(db, { memberId, couponId, by }) {
+  const c = await db.one('SELECT * FROM member_coupons WHERE id = $1 FOR UPDATE', [parseInt(String(couponId).replace(/\D/g, ''), 10)]);
+  if (!c || (memberId && c.member_id !== memberId)) throw notFound('ไม่พบคูปอง');
+  if (c.source !== 'redeem') throw bad('not_redeemed', 'คูปองนี้ไม่ได้มาจากการแลกแต้ม');
+  if (c.status !== 'ready' || c.expires_at < new Date()) throw conflict('coupon_unusable', 'ยกเลิกได้เฉพาะคูปองที่ยังไม่ได้ใช้และยังไม่หมดอายุ');
+  const info = (await cancelInfo(db, [c])).get(String(c.id));
+  if (!info) throw bad('not_redeemed', 'ไม่พบประวัติการแลกของคูปองนี้');
+  const led = await db.one('SELECT * FROM point_ledger WHERE id = $1', [c.source_ref]);
+  const w = await lockWallet(db, c.member_id, led.brand_id);
+  const uses = await db.q('SELECT u.lot_id, u.points FROM point_lot_uses u JOIN point_lots l ON l.id = u.lot_id WHERE u.ledger_id = $1 AND (l.expires_at IS NULL OR l.expires_at > now()) FOR UPDATE OF l', [led.id]);
+  const balance = w.balance + info.restore;
+  if (info.restore > 0) {
+    const back = await db.one(`INSERT INTO point_ledger (member_id, brand_id, entry_type, points, balance_after, ref_type, ref_id, idempotency_key, note, actor_type, actor_id)
+      VALUES ($1,$2,'refund',$3,$4,'redeem_cancel',$5,$6,$7,$8,$9) RETURNING id`, [c.member_id, led.brand_id, info.restore, balance, String(led.id), 'redeem-cancel:' + led.id,
+      'ยกเลิกการแลก ' + (led.note || '').replace(/^แลก /, '') + (info.lost ? ' (หมดอายุแล้ว ' + info.lost + ' แต้ม)' : ''), by.type, by.id]);
+    if (uses.length) for (const u of uses) await db.q('UPDATE point_lots SET remaining = remaining + $2 WHERE id = $1', [u.lot_id, u.points]);
+    else {
+      const rule = await currentRule(db, led.brand_id); const months = rule ? rule.expiry_months : 0;
+      await db.q(`INSERT INTO point_lots (member_id, brand_id, source_ledger_id, points, remaining, expires_at) VALUES ($1,$2,$3,$4,$4, CASE WHEN $5::int > 0 THEN now() + make_interval(months => $5::int) END)`,
+        [c.member_id, led.brand_id, back.id, info.restore, months]);
+    }
+    await db.q('UPDATE wallets SET balance = $3, updated_at = now() WHERE member_id = $1 AND brand_id = $2', [c.member_id, led.brand_id, balance]);
+  }
+  await db.q("UPDATE member_coupons SET status = 'void', voided_at = now(), reserved_ref = NULL, reserved_until = NULL, reserved_at = NULL WHERE id = $1", [c.id]);
+  if (led.ref_type === 'reward') await db.q('UPDATE rewards SET stock = stock + 1 WHERE id = $1 AND stock IS NOT NULL', [parseInt(led.ref_id, 10)]);
+  await audit(db, by, 'cancel_redeem', { type: 'member', id: c.member_id }, 'ยกเลิกการแลก ' + c.code + ' · คืน ' + info.restore + ' แต้ม' + (info.lost ? ' (หมดอายุ ' + info.lost + ')' : ''));
+  return { restored: info.restore, lost: info.lost, balance: info.restore > 0 ? balance : w.balance };
 }
 
 export async function redeem(db, { memberId, rewardId, key }) {
@@ -435,6 +485,9 @@ export async function posWallet(db, { memberId, brandId, subtotal, ref, items })
       outOfStock: r.stock !== null && r.stock <= 0, why: r.why, affordable: r.points_cost <= balance && !r.why,
       fits: !err, reason: err ? err.msg : null, discount: err ? 0 : res.discount, voucher: c ? isVoucher(c) : false };
   });
+  // คูปองจากการแลกแต้ม: ยกเลิกการแลกแล้วคืนแต้มได้ (cancel = { cost, restore, lost })
+  const ci = await cancelInfo(db, [...kept, ...cs]);
+  for (const x of [...applied, ...coupons]) x.cancel = ci.get(x.id) || null;
   return { balance, applied, appliedTotal: Math.round(applied.reduce((a, x) => a + x.discount, 0) * 100) / 100,
     dropped: dropped.map((x) => ({ id: String(x.c.id), title: x.c.title, reason: x.err.msg })), coupons, rewards, maxCoupons: MAX_COUPONS_PER_BILL };
 }

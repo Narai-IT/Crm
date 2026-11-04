@@ -78,9 +78,15 @@ export default function (r) {
     const { m } = await needMember(req);
     const brand = url.searchParams.get('brand');
     if (brand) await tx((db) => core.autoIssue(db, m.id, brand));
-    const rows = await q(COUPON_SQL + ' WHERE c.member_id = $1 AND ($2::text IS NULL OR c.brand_id = $2 OR c.brand_id IS NULL) ORDER BY c.expires_at', [m.id, brand]);
-    return rows.map(couponView);
+    const rows = (await q(COUPON_SQL + ' WHERE c.member_id = $1 AND ($2::text IS NULL OR c.brand_id = $2 OR c.brand_id IS NULL) ORDER BY c.expires_at', [m.id, brand])).filter((c) => c.status !== 'void');
+    const ci = await core.cancelInfo({ q, one }, rows);
+    return rows.map((c) => ({ ...couponView(c), cancel: ci.get(String(c.id)) || null }));
   });
+  // ลูกค้ายกเลิกการแลกแต้มเอง (คูปองที่ยังไม่ใช้) → คืนแต้มเข้าก้อนเดิม
+  r.post('/api/liff/coupons/:id/cancel', async (req, _b, _u, p) => {
+    const { m } = await needMember(req);
+    return tx((db) => core.cancelRedeem(db, { memberId: m.id, couponId: p.id, by: { type: 'member', id: m.id } }));
+  }, (b, out) => 'ยกเลิกการแลก คืน ' + (out?.restored ?? 0) + ' แต้ม');
 
   r.post('/api/liff/coupons/claim', async (req, body) => {
     const { m } = await needMember(req);
