@@ -2,7 +2,7 @@
 import { q, one, tx } from '../db.js';
 import { bad, notFound } from '../http.js';
 import { liffUser } from '../auth.js';
-import { isPhone, qrToken, memberPin } from '../util.js';
+import { isPhone, qrToken, memberPin, couponQrToken } from '../util.js';
 import * as core from '../services/core.js';
 import { isFriend } from '../services/line.js';
 
@@ -81,6 +81,13 @@ export default function (r) {
     const rows = (await q(COUPON_SQL + ' WHERE c.member_id = $1 AND ($2::text IS NULL OR c.brand_id = $2 OR c.brand_id IS NULL) ORDER BY c.expires_at', [m.id, brand])).filter((c) => c.status !== 'void');
     const ci = await core.cancelInfo({ q, one }, rows);
     return rows.map((c) => ({ ...couponView(c), cancel: ci.get(String(c.id)) || null }));
+  });
+  // QR คูปองที่ให้พนักงานสแกน: เปลี่ยนทุก 30 วิ ใช้ได้ครั้งเดียว
+  r.get('/api/liff/coupons/:id/qr', async (req, _b, _u, p) => {
+    const { m } = await needMember(req);
+    const c = await one("SELECT id FROM member_coupons WHERE id = $1 AND member_id = $2 AND status = 'ready' AND expires_at > now()", [parseInt(p.id, 10), m.id]);
+    if (!c) throw notFound('คูปองนี้ใช้ไม่ได้แล้ว');
+    return couponQrToken(c.id);
   });
   // ลูกค้ายกเลิกการแลกแต้มเอง (คูปองที่ยังไม่ใช้) → คืนแต้มเข้าก้อนเดิม
   r.post('/api/liff/coupons/:id/cancel', async (req, _b, _u, p) => {

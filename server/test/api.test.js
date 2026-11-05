@@ -499,7 +499,7 @@ t('แต้มรีวิวร้านในแชท LINE: ตั้งค�
   await call('PATCH', '/api/admin/brands/humlai/review', { reviewPoints: 5 }, adm);
 });
 
-t('POS สแกน QR คูปอง: ได้สมาชิกและคูปองในครั้งเดียว', async () => {
+t('POS สแกน QR คูปอง (ใช้ได้ครั้งเดียว): ได้สมาชิกและคูปองในครั้งเดียว · หน้าพนักงานต้องสแกนถึงจองได้', async () => {
   const u = { 'x-dev-line-user': 'Ucpscan000000000000000000000001' };
   await call('POST', '/api/liff/register', { brand: 'humlai', name: 'สแกนคูปอง', phone: '0866660000', privacy: true }, u);
   const mid = (await call('GET', '/api/liff/me', undefined, u)).data.member.id;
@@ -509,23 +509,34 @@ t('POS สแกน QR คูปอง: ได้สมาชิกและค�
   const gift = await call('POST', '/api/admin/members/' + mid + '/coupons', { templateId: tpl.id }, adm);
   assert.equal(gift.status, 200, JSON.stringify(gift.data));
   const code = gift.data.code;
+  const qr = async () => (await call('GET', '/api/liff/coupons/' + gift.data.couponId + '/qr', undefined, u)).data.token;
 
-  const r = await call('POST', '/api/pos/members/resolve', { query: 'CP.' + code }, posHL01);
+  // QR คูปองแบบใหม่: เปลี่ยนทุก 30 วิ · สแกนได้ครั้งเดียว
+  const tok = await qr();
+  assert.match(tok, /^CQ\./);
+  const r = await call('POST', '/api/pos/members/resolve', { query: tok }, posHL01);
   assert.equal(r.status, 200, JSON.stringify(r.data));
   assert.equal(r.data.member.id, mid);
-  assert.equal(r.data.scannedCoupon.id, gift.data.couponId);
-  assert.equal(r.data.scannedCoupon.code, code);
-  // พิมพ์รหัสคูปองเอง (ตัวเล็กก็ได้) เหมือนสแกน
-  const r2 = await call('POST', '/api/pos/members/resolve', { query: code.toLowerCase() }, posHL01);
-  assert.equal(r2.data.member.id, mid);
-  assert.equal(r2.data.scannedCoupon.id, gift.data.couponId);
-  // ใช้แล้ว → ยังได้สมาชิก แต่บอกว่าใช้ไม่ได้
+  assert.equal(r.data.scannedCoupon.id, gift.data.couponId); assert.ok(r.data.scannedCoupon.scanProof);
+  assert.equal((await call('POST', '/api/pos/members/resolve', { query: tok }, posHL01)).status, 409);          // แคปหน้าจอไปสแกนซ้ำไม่ได้
+  assert.equal((await call('POST', '/api/pos/members/resolve', { query: tok.slice(0, -1) + (tok.endsWith('A') ? 'B' : 'A') }, posHL01)).status, 400);
+  // QR แบบเก่า / พิมพ์รหัสคูปอง ใช้ไม่ได้แล้ว
+  assert.equal((await call('POST', '/api/pos/members/resolve', { query: 'CP.' + code }, posHL01)).data.error, 'coupon_qr_old');
+  assert.equal((await call('POST', '/api/pos/members/resolve', { query: code.toLowerCase() }, posHL01)).data.error, 'coupon_qr_old');
+  // หน้าพนักงาน: จองคูปองได้เฉพาะที่สแกนมา · แลกแต้มไม่ได้
+  const resv = (extra) => call('POST', '/api/pos/coupons/reserve', { memberId: mid, couponId: gift.data.couponId, ref: 'scan-1', subtotal: 500, items: [{ name: 'ข้าวมันไก่', price: 500, qty: 1 }], mode: 'staff', ...extra }, posHL01);
+  assert.equal((await resv({})).status, 403);
+  assert.equal((await resv({ scanProof: r.data.scannedCoupon.scanProof })).status, 200);
+  assert.equal((await call('POST', '/api/pos/redeem', { memberId: mid, rewardId: 1, ref: 'scan-1', subtotal: 100, mode: 'staff' }, posHL01)).status, 403);
+  await call('POST', '/api/pos/coupons/release', { couponId: gift.data.couponId, ref: 'scan-1' }, posHL01);
+  // ใช้แล้ว → ยังได้สมาชิก แต่บอกว่าใช้ไม่ได้ · เปิด QR ใหม่ไม่ได้
+  const tok2 = await qr();
   await mods.db.q("UPDATE member_coupons SET status = 'used', used_at = now() WHERE id = $1", [gift.data.couponId]);
-  const r3 = await call('POST', '/api/pos/members/resolve', { query: 'CP.' + code }, posHL01);
+  const r3 = await call('POST', '/api/pos/members/resolve', { query: tok2 }, posHL01);
   assert.equal(r3.data.member.id, mid);
   assert.equal(r3.data.scannedCoupon.usable, false);
   assert.equal(r3.data.scannedCoupon.reason, 'คูปองนี้ใช้ไปแล้ว');
-  assert.equal((await call('POST', '/api/pos/members/resolve', { query: 'CP.ZZ-NONE99' }, posHL01)).status, 404);
+  assert.equal((await call('GET', '/api/liff/coupons/' + gift.data.couponId + '/qr', undefined, u)).status, 404);
   // QR บัตรสมาชิก / เบอร์โทร ไม่มี scannedCoupon
   assert.equal((await call('POST', '/api/pos/members/resolve', { query: '0866660000' }, posHL01)).data.scannedCoupon, null);
 });
@@ -991,6 +1002,12 @@ t('ยกเลิกการแลกแต้ม: คืนแต้มเข
   assert.equal(det.cancel.restore, 30 - uses[0].points); assert.equal(det.cancel.lost, uses[0].points);
   const can2 = await call('POST', '/api/admin/members/' + mem + '/coupons/' + red2.data.coupon.id + '/cancel', {}, adm);
   assert.equal(can2.status, 200, JSON.stringify(can2.data)); assert.equal(can2.data.restored, 30 - uses[0].points); assert.equal(can2.data.lost, uses[0].points);
+  // เลยวันที่แลกแล้วยกเลิกไม่ได้
+  const red3 = await call('POST', '/api/pos/redeem', { memberId: mem, rewardId: rw.id, ref: 'cancel-3', subtotal: 100, items: [] }, posHL01);
+  assert.equal(red3.status, 200, JSON.stringify(red3.data));
+  await mods.db.q("UPDATE point_ledger SET created_at = now() - interval '1 day' WHERE id = (SELECT source_ref::bigint FROM member_coupons WHERE id = $1)", [red3.data.coupon.id]);
+  const late = await call('POST', '/api/pos/coupons/cancel-redeem', { memberId: mem, couponId: red3.data.coupon.id }, posHL01);
+  assert.equal(late.status, 400); assert.equal(late.data.error, 'cancel_closed');
   // คูปองที่ไม่ได้มาจากการแลก ยกเลิกไม่ได้
   const gift = (await call('POST', '/api/admin/coupon-templates', { brand: 'humlai', kind: 'gift', title: 'ของขวัญยกเลิกไม่ได้', type: 'baht', value: 5, validity: 'days', days: 30, useDays: 127, active: true }, adm)).data;
   const gid = (await call('POST', '/api/admin/members/' + mem + '/coupons', { templateId: gift.id }, adm)).data.couponId;

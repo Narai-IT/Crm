@@ -130,9 +130,10 @@
     return '<div class="qr-fallback">' + esc(S.qr.token) + '</div>';
   }
   // QR คูปอง: CP.<รหัสคูปอง> · POS สแกนแล้วได้ทั้งสมาชิกและคูปองนี้
-  function couponQr(code) {
-    if (!window.qrcode) return '';
-    const q = window.qrcode(0, 'M'); q.addData('CP.' + code); q.make();
+  // QR คูปองจากเซิร์ฟเวอร์: เปลี่ยนทุก 30 วิ ใช้ได้ครั้งเดียว (แคปหน้าจอไปใช้ไม่ได้)
+  function couponQr(token) {
+    if (!window.qrcode || !token) return '<div class="cqr-wait">กำลังสร้าง QR…</div>';
+    const q = window.qrcode(0, 'M'); q.addData(token); q.make();
     return '<div class="cqr">' + q.createSvgTag({ cellSize: 5, margin: 2, scalable: true }) + '</div>';
   }
   function couponHtml(c, usable) {
@@ -145,7 +146,31 @@
       (usable && !notYet ? '<div class="cbtns"><button class="btn sm" data-a="code" data-v="' + c.id + '">' + (show ? 'ซ่อน' : 'ใช้คูปอง') + '</button>' +
         (c.cancel ? '<button class="btn sm ghost" data-a="cancelAsk" data-v="' + c.id + '">ยกเลิกการแลก คืน ' + fmt(c.cancel.restore) + ' แต้ม</button>' : '') + '</div>'
         : usable && c.cancel ? '<div class="cbtns"><button class="btn sm ghost" data-a="cancelAsk" data-v="' + c.id + '">ยกเลิกการแลก คืน ' + fmt(c.cancel.restore) + ' แต้ม</button></div>' : '') +
-      (show ? '<div class="code">' + couponQr(c.code) + '<small>ให้พนักงานสแกน QR นี้ · ใช้คูปองและสะสมแต้มในครั้งเดียว</small><br><b>' + esc(c.code) + '</b></div>' : '') + '</div></div>';
+      (usable && c.source === 'redeem' ? '<small class="muted">' + (c.cancel ? 'ยกเลิกคืนแต้มได้ถึง 23:59 วันนี้' : 'เลยวันที่แลกแล้ว ยกเลิกคืนแต้มไม่ได้') + '</small>' : '') +
+      (show ? '<div class="code">' + couponQr(S.cqr && S.cqr.id === c.id ? S.cqr.token : null) + '<b class="cqr-left" id="cqr-left">' + cqrText() + '</b>' +
+        '<small>ให้พนักงานสแกนที่ร้าน · ใช้ได้ครั้งเดียว · แคปหน้าจอไปใช้ไม่ได้</small></div>' : '') + '</div></div>';
+  }
+  // นับถอยหลัง QR คูปอง แล้วขอใหม่เมื่อหมดเวลา
+  let cqrTimer = null;
+  const cqrLeft = () => (S.cqr ? Math.max(0, S.cqr.ttl - Math.floor((Date.now() - S.cqr.at) / 1000)) : 0);
+  const cqrText = () => (S.cqr && S.cqr.token ? 'QR เปลี่ยนใน ' + cqrLeft() + ' วินาที' : '');
+  async function loadCouponQr(id) {
+    try {
+      const r = await api('GET', '/api/liff/coupons/' + encodeURIComponent(id) + '/qr');
+      if (S.showCode !== id) return;
+      S.cqr = { id, token: r.token, ttl: r.expiresIn || 30, at: Date.now() };
+    } catch (e) { S.showCode = null; S.cqr = null; toast(e.message); await refresh(); return; }
+    render();
+  }
+  function startCouponQr(id) {
+    clearInterval(cqrTimer); S.cqr = null;
+    if (!id) return;
+    loadCouponQr(id);
+    cqrTimer = setInterval(() => {
+      if (!S.showCode || S.tab !== 'coupons' && S.tab !== 'home') { clearInterval(cqrTimer); S.cqr = null; return; }
+      if (S.cqr && cqrLeft() <= 0) { S.cqr.token = null; loadCouponQr(S.showCode); return; }
+      const el = document.getElementById('cqr-left'); if (el) el.textContent = cqrText();
+    }, 1000);
   }
 
   function homeView() {
@@ -280,7 +305,7 @@
     close: () => { if (S.inClient && window.liff) window.liff.closeWindow(); else history.back(); },
     tab: async (v) => { S.tab = v; S.pick = null; S.showCode = null; await loadTab(); render(); window.scrollTo(0, 0); },
     copy: (v) => { (navigator.clipboard ? navigator.clipboard.writeText(v) : Promise.reject()).then(() => toast('คัดลอก ' + v + ' แล้ว'), () => toast('เลขสมาชิก ' + v)); },
-    code: (v) => { S.showCode = S.showCode === v ? null : v; render(); },
+    code: (v) => { S.showCode = S.showCode === v ? null : v; startCouponQr(S.showCode); render(); },
     ctab: (v) => { S.couponTab = v; S.showCode = null; render(); },
     claim: async () => {
       if (S.code.trim().length < 4) return toast('กรอกโค้ดอย่างน้อย 4 ตัวอักษร');
@@ -301,7 +326,7 @@
       const id = S.pick; S.pick = null;
       const key = 'rdm-' + Date.now() + '-' + Math.random().toString(36).slice(2);
       const r = await api('POST', '/api/liff/redemptions', { rewardId: id }, { 'idempotency-key': key });
-      S.tab = 'coupons'; S.couponTab = 'ready'; S.showCode = r.couponId; toast('แลกสำเร็จ ได้คูปองแล้ว'); await refresh();
+      S.tab = 'coupons'; S.couponTab = 'ready'; S.showCode = String(r.couponId); toast('แลกสำเร็จ ได้คูปองแล้ว'); await refresh(); startCouponQr(S.showCode);
     },
     hist: (v) => { S.hist = v; render(); },
     bill: (v) => { S.openBill = S.openBill === v ? null : v; render(); },
