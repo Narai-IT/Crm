@@ -58,7 +58,7 @@ export async function roundAudience(db, { brandId, tiers, followersOnly, pick, l
   const order = pick === 'recent' ? 'x.last_at DESC NULLS LAST, x.id' : pick === 'random' ? 'random()' : 'x.earned DESC, x.id';
   return db.q(`SELECT x.* FROM (
       SELECT m.id, COALESCE(k.follow_status, 'none') AS follow,
-        COALESCE((SELECT sum(points) FROM point_ledger l WHERE l.member_id = m.id AND l.brand_id = $1 AND l.points > 0 AND l.entry_type <> 'merge' AND l.created_at > now() - interval '365 days'), 0)::int AS earned,
+        COALESCE((SELECT sum(points) FROM point_ledger l WHERE l.member_id = m.id AND l.brand_id = $1 AND l.points > 0 AND l.entry_type NOT IN ('merge', 'refund') AND l.created_at > now() - interval '365 days'), 0)::int AS earned,
         (SELECT max(created_at) FROM point_ledger l WHERE l.member_id = m.id AND l.brand_id = $1) AS last_at,
         (SELECT line_user_id FROM member_line_identities i WHERE i.member_id = m.id ORDER BY linked_at DESC LIMIT 1) AS line_user_id
       FROM members m LEFT JOIN member_brand_links k ON k.member_id = m.id AND k.brand_id = $1

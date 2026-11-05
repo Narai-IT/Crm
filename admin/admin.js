@@ -687,6 +687,8 @@
       body = '<div class="kvx">' +
         kv('หมายเหตุ', '<form data-f="mnote" class="mnote-f"><label class="sr" for="m-note">หมายเหตุ</label><textarea id="m-note" name="note" maxlength="500" rows="2" placeholder="เช่น แพ้ถั่ว · ชอบนั่งริมหน้าต่าง">' + esc(x.note || '') + '</textarea><button class="btn ghost sm">บันทึก</button></form>') +
         kv('คูปองคงเหลือ', '<b class="n">' + coupons.length + '</b> คูปอง' + (coupons.length ? '<small class="muted"> · ' + coupons.slice(0, 3).map((c) => esc(c.title)).join(', ') + (coupons.length > 3 ? ' …' : '') + '</small>' : '')) +
+        (coupons.some((c) => c.cancel) ? kv('คูปองจากการแลกแต้ม', '<div class="rdm">' + coupons.filter((c) => c.cancel).map((c) => '<div class="rdm-r"><span>' + esc(c.title) +
+          '<small class="muted"> · แลก ' + fmt(c.cancel.cost) + ' แต้ม · หมด ' + date(c.expiresAt) + '</small></span><button type="button" class="btn danger sm" data-a="cancelRedeem" data-v="' + esc(c.id) + '">ยกเลิกแลก คืน ' + fmt(c.cancel.restore) + ' แต้ม</button></div>').join('') + '</div>') : '') +
         kv('แต้มคงเหลือ', '<b class="n">' + fmt(w.balance) + '</b> แต้ม') +
         kv('แต้มใกล้หมดอายุ', '<b class="n">' + fmt(x.expiring30 || 0) + '</b> แต้ม <small class="muted">(ภายใน 30 วัน)</small>') +
         kv('สะสม 12 เดือน', fmt(t.at || 0) + ' / ' + fmt(t.max || 0) + ' แต้ม' + (t.next ? ' <small class="muted">(อีก ' + fmt(t.need) + ' ขึ้น ' + esc(t.next) + ')</small>' : '')) +
@@ -970,6 +972,12 @@
     member: async (v) => { await openMember(v); S.tagPick = false; render(); },
     mpage: async (v) => { S.mf.page = Math.max(1, parseInt(v, 10) || 1); await load(); },
     mtab: (v) => { S.mtab = v; render(); },
+    cancelRedeem: async (v) => {
+      const m = S.member.member; const c = S.member.coupons.find((x) => x.id === v); if (!c || !c.cancel) return;
+      if (!confirm('ยกเลิกการแลก "' + c.title + '"?\nคืน ' + fmt(c.cancel.restore) + ' แต้มให้ลูกค้า (วันหมดอายุเดิม)' + (c.cancel.lost ? '\nอีก ' + fmt(c.cancel.lost) + ' แต้มหมดอายุไปแล้ว คืนไม่ได้' : '') + '\nคูปองใบนี้จะใช้ไม่ได้แล้ว')) return;
+      const r = await api('POST', '/api/admin/members/' + encodeURIComponent(m.id) + '/coupons/' + encodeURIComponent(c.id) + '/cancel', {});
+      toast('ยกเลิกการแลกแล้ว คืน ' + fmt(r.restored) + ' แต้ม'); await openMember(m.id); render();
+    },
     actf: (v) => { S.actf = v; render(); },
     tagPick: () => { S.tagPick = !S.tagPick; render(); const f = document.querySelector('form[data-f="mtag"] select'); if (f) f.focus(); },
     untag: async (v) => { await api('DELETE', '/api/admin/members/' + encodeURIComponent(S.member.member.id) + '/tags/' + v); await load(); },

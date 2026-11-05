@@ -130,3 +130,6 @@ h1, h2, h3 { font-family: var(--f-display); font-weight: 600; margin: 0; }
 .btn.line { background: #06C755; }
 .steps { display: flex; justify-content: center; gap: 18px; font-size: 13px; color: var(--muted); }
 .steps .on { color: var(--ai); font-weight: 700; }
+
+/* คูปองจากการแลกแต้ม: ปุ่มใช้คูปอง + ยกเลิกการแลก */
+.cbtns { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; }

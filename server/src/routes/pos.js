@@ -88,6 +88,11 @@ export default function (r) {
     await posTerminal(req);
     return tx((db) => core.releaseCoupon(db, { couponId: body.couponId, ref: body.ref }));
   });
+  // ยกเลิกการแลกแต้ม (คูปองจากการแลกที่ยังไม่ใช้) → คืนแต้มเข้าก้อนเดิม และถอดออกจากบิล
+  r.post('/api/pos/coupons/cancel-redeem', async (req, body) => {
+    const t = await posTerminal(req);
+    return tx((db) => core.cancelRedeem(db, { memberId: memberOf(body), couponId: body.couponId, by: { type: 'pos', id: t.terminalId } }));
+  }, (b, out) => 'ยกเลิกการแลก คืน ' + (out?.restored ?? 0) + ' แต้ม');
   r.post('/api/pos/redeem', async (req, body) => {
     const t = await posTerminal(req);
     if (!body.ref) throw bad('ref_required', 'ต้องมีรหัสบิลที่กำลังเปิด');

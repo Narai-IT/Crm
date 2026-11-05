@@ -257,7 +257,7 @@ export function audienceSql(segment) {
 const MEMBER_SCOPE = core.MEMBER_SCOPE;
 const MEMBER_COLS = `m.id, m.full_name, m.phone, m.created_at, m.home_branch_id, m.birth_date,
   COALESCE((SELECT balance FROM wallets w WHERE w.member_id = m.id AND w.brand_id = $1), 0)::int AS points,
-  COALESCE((SELECT sum(points) FROM point_ledger l WHERE l.member_id = m.id AND l.brand_id = $1 AND l.points > 0 AND l.entry_type <> 'merge' AND l.created_at > now() - interval '365 days'), 0)::int AS earned,
+  COALESCE((SELECT sum(points) FROM point_ledger l WHERE l.member_id = m.id AND l.brand_id = $1 AND l.points > 0 AND l.entry_type NOT IN ('merge', 'refund') AND l.created_at > now() - interval '365 days'), 0)::int AS earned,
   (SELECT note FROM member_notes n WHERE n.member_id = m.id AND n.brand_id = $1) AS note,
   (SELECT picture_url FROM member_line_identities i WHERE i.member_id = m.id ORDER BY linked_at DESC LIMIT 1) AS picture,
   GREATEST((SELECT max(paid_at) FROM sales_transactions st WHERE st.member_id = m.id AND st.brand_id = $1),
@@ -492,7 +492,8 @@ export default function (r) {
       wallets: await core.walletsOf({ q, one }, m.id),
       links: await q('SELECT * FROM member_brand_links WHERE member_id = $1', [m.id]),
       ledger: await q('SELECT * FROM point_ledger WHERE member_id = $1 AND brand_id = ANY($2) ORDER BY id DESC LIMIT 50', [m.id, s.brands]),
-      coupons: (await q(COUPON_SQL + ' WHERE c.member_id = $1 AND (c.brand_id = ANY($2) OR c.brand_id IS NULL) ORDER BY c.id DESC', [m.id, s.brands])).map(couponView),
+      coupons: await (async () => { const rows = await q(COUPON_SQL + ' WHERE c.member_id = $1 AND (c.brand_id = ANY($2) OR c.brand_id IS NULL) ORDER BY c.id DESC', [m.id, s.brands]);
+        const ci = await core.cancelInfo({ q, one }, rows); return rows.map((c) => ({ ...couponView(c), cancel: ci.get(String(c.id)) || null })); })(),
       bills: await q('SELECT pos_bill_id, branch_id, brand_id, total, discount, points_earned, status, paid_at FROM sales_transactions WHERE member_id = $1 AND brand_id = ANY($2) ORDER BY paid_at DESC LIMIT 50', [m.id, s.brands]),
       ...(brand ? await memberExtra(m.id, brand) : {})
     };
@@ -737,6 +738,14 @@ export default function (r) {
     return { id: row.id, url: '/api/public/coupon-images/' + row.id };
   });
   // มอบคูปองให้สมาชิกรายคน (เมนูสมาชิก)
+  // พนักงานยกเลิกการแลกแต้มให้ลูกค้า → คืนแต้มเข้าก้อนเดิม
+  r.post('/api/admin/members/:id/coupons/:cid/cancel', async (req, _b, _u, p) => {
+    const s = await staffUser(req); requirePage(s, 'members');
+    const c = await one('SELECT brand_id FROM member_coupons WHERE id = $1 AND member_id = $2', [parseInt(p.cid, 10), p.id]);
+    if (!c) throw notFound('ไม่พบคูปอง');
+    if (c.brand_id) requireBrand(s, c.brand_id);
+    return tx((db) => core.cancelRedeem(db, { memberId: p.id, couponId: p.cid, by: actor(s) }));
+  });
   r.post('/api/admin/members/:id/coupons', async (req, b, _u, p) => {
     const s = await staffUser(req); requirePage(s, 'members');
     const t = await one('SELECT brand_id FROM coupon_templates WHERE id = $1', [parseInt(b.templateId, 10)]);
