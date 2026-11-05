@@ -63,6 +63,19 @@ export function checkMemberPin(memberId, pin, at = Date.now()) {
   for (let k = 0; k <= 2; k++) if (memberPin(memberId, at - k * WINDOW * 1000) === p) return true;
   return false;
 }
+// QR คูปอง: เปลี่ยนทุก 30 วิ (อายุ 35 วิ) และใช้ได้ครั้งเดียว (เก็บ jti ที่สแกนแล้วใน coupon_qr_used) · แคปหน้าจอไปใช้ทีหลังไม่ได้
+export const COUPON_QR_TTL = 35;
+export function couponQrToken(couponId, at = Date.now()) {
+  const nonce = crypto.randomBytes(6).toString('base64url'); const exp = Math.floor(at / 1000) + COUPON_QR_TTL;
+  return { token: 'CQ.' + couponId + '.' + nonce + '.' + exp.toString(36) + '.' + hmac('cq:' + couponId + ':' + nonce + ':' + exp).slice(0, 12), expiresIn: 30 };
+}
+export function readCouponQr(token, at = Date.now()) {
+  const m = /^CQ\.(\d+)\.([\w-]{8})\.([0-9a-z]+)\.([\w-]{12})$/.exec(String(token || ''));
+  if (!m) return null;
+  const exp = parseInt(m[3], 36);
+  if (hmac('cq:' + m[1] + ':' + m[2] + ':' + exp).slice(0, 12) !== m[4]) return null;
+  return { couponId: Number(m[1]), jti: m[1] + '.' + m[2], expired: exp < Math.floor(at / 1000) };
+}
 export function readQrToken(token, at = Date.now()) {
   const m = /^QR\.(\d{7})\.(\d+)\.([\w-]{10})$/.exec(String(token || ''));
   if (!m) return null;

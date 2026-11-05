@@ -175,6 +175,7 @@ export async function giftCoupon(db, { memberId, templateId, by }) {
 }
 
 export async function expireCoupons(db) {
+  await db.q("DELETE FROM coupon_qr_used WHERE used_at < now() - interval '1 day'");
   return (await db.q("UPDATE member_coupons SET status = 'expired' WHERE status = 'ready' AND expires_at < now() RETURNING id")).length;
 }
 
@@ -329,7 +330,9 @@ export async function cancelInfo(db, coupons) {
   const list = coupons.filter((c) => c.source === 'redeem' && c.status === 'ready' && new Date(c.expires_at) > new Date() && /^\d+$/.test(String(c.source_ref || '')));
   const out = new Map();
   if (!list.length) return out;
-  const led = await db.q("SELECT id, -points AS cost FROM point_ledger WHERE id = ANY($1::bigint[]) AND entry_type = 'redeem'", [list.map((c) => c.source_ref)]);
+  // ยกเลิกได้เฉพาะวันที่แลก (เวลาไทย)
+  const led = await db.q(`SELECT id, -points AS cost FROM point_ledger WHERE id = ANY($1::bigint[]) AND entry_type = 'redeem'
+    AND (created_at AT TIME ZONE 'Asia/Bangkok')::date = (now() AT TIME ZONE 'Asia/Bangkok')::date`, [list.map((c) => c.source_ref)]);
   const uses = await db.q('SELECT u.ledger_id, u.points, (l.expires_at IS NULL OR l.expires_at > now()) AS alive FROM point_lot_uses u JOIN point_lots l ON l.id = u.lot_id WHERE u.ledger_id = ANY($1::bigint[])', [led.map((l) => l.id)]);
   for (const c of list) {
     const l = led.find((x) => String(x.id) === String(c.source_ref)); if (!l) continue;
@@ -345,7 +348,7 @@ export async function cancelRedeem(db, { memberId, couponId, by }) {
   if (c.source !== 'redeem') throw bad('not_redeemed', 'คูปองนี้ไม่ได้มาจากการแลกแต้ม');
   if (c.status !== 'ready' || c.expires_at < new Date()) throw conflict('coupon_unusable', 'ยกเลิกได้เฉพาะคูปองที่ยังไม่ได้ใช้และยังไม่หมดอายุ');
   const info = (await cancelInfo(db, [c])).get(String(c.id));
-  if (!info) throw bad('not_redeemed', 'ไม่พบประวัติการแลกของคูปองนี้');
+  if (!info) throw bad('cancel_closed', 'ยกเลิกการแลกคืนแต้มได้เฉพาะวันที่แลกเท่านั้น');
   const led = await db.one('SELECT * FROM point_ledger WHERE id = $1', [c.source_ref]);
   const w = await lockWallet(db, c.member_id, led.brand_id);
   const uses = await db.q('SELECT u.lot_id, u.points FROM point_lot_uses u JOIN point_lots l ON l.id = u.lot_id WHERE u.ledger_id = $1 AND (l.expires_at IS NULL OR l.expires_at > now()) FOR UPDATE OF l', [led.id]);

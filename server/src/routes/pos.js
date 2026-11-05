@@ -2,21 +2,27 @@
 import { q, one, tx } from '../db.js';
 import { bad, notFound, HttpError } from '../http.js';
 import { posTerminal } from '../auth.js';
-import { readQrToken, maskPhone, signToken, verifyToken } from '../util.js';
+import { readQrToken, readCouponQr, maskPhone, signToken, verifyToken } from '../util.js';
 import * as core from '../services/core.js';
 import { COUPON_SQL, couponView } from './liff.js';
 
 export default function (r) {
-  // ระบุสมาชิกจาก QR บัตรสมาชิก (หมุนทุก 60 วิ) / QR คูปอง (CP.HL-7JCQ หรือรหัสคูปอง) / เลขสมาชิก / เบอร์โทร
-  // สแกนคูปอง = ได้ทั้งสมาชิก (สะสมแต้ม) และคูปองที่จะใช้กับบิลนี้ (scannedCoupon)
+  // ระบุสมาชิกจาก QR บัตรสมาชิก (หมุนทุก 60 วิ) / QR คูปอง (CQ. เปลี่ยนทุก 30 วิ ใช้ได้ครั้งเดียว) / เลขสมาชิก / เบอร์โทร
+  // สแกนคูปอง = ได้ทั้งสมาชิก (สะสมแต้ม) และคูปองที่จะใช้กับบิลนี้ (scannedCoupon + scanProof ใช้จองคูปองที่หน้าพนักงาน)
+  // QR คูปองแบบเก่า (CP.HL-7JCQ / รหัสคูปอง) ไม่รับแล้ว เพราะแคปหน้าจอไปใช้ได้
   r.post('/api/pos/members/resolve', async (req, body) => {
     const t = await posTerminal(req);
     let m = null; let scanned = null;
     const qv = String(body.qrToken || body.query || '').trim();
-    const cpCode = /^(CP\.)?([A-Z0-9]{2}-[A-Z0-9]{4,8})$/i.exec(qv);
-    if (cpCode) {
-      const c = await one('SELECT id, code, member_id FROM member_coupons WHERE code = $1', [cpCode[2].toUpperCase()]);
-      if (!c) throw notFound('ไม่พบคูปอง ' + cpCode[2].toUpperCase());
+    if (/^(CP\.)?[A-Z0-9]{2}-[A-Z0-9]{4,8}$/i.test(qv)) throw bad('coupon_qr_old', 'QR คูปองแบบเก่าใช้ไม่ได้แล้ว ให้ลูกค้ากด "ใช้คูปอง" ในบัตรสมาชิก LINE แล้วสแกน QR ใหม่');
+    if (qv.startsWith('CQ.')) {
+      const cq = readCouponQr(qv);
+      if (!cq) throw bad('qr_invalid', 'QR คูปองไม่ถูกต้อง');
+      if (cq.expired) throw new HttpError(410, 'qr_expired', 'QR คูปองหมดอายุ ให้ลูกค้ากด "ใช้คูปอง" ในบัตรสมาชิกใหม่');
+      const once = await one('INSERT INTO coupon_qr_used (jti) VALUES ($1) ON CONFLICT DO NOTHING RETURNING jti', [cq.jti]);
+      if (!once) throw new HttpError(409, 'qr_used', 'QR นี้ถูกสแกนไปแล้ว ให้ลูกค้ากด "ใช้คูปอง" ในบัตรสมาชิกใหม่');
+      const c = await one('SELECT id, member_id FROM member_coupons WHERE id = $1', [cq.couponId]);
+      if (!c) throw notFound('ไม่พบคูปอง');
       m = await one("SELECT * FROM members WHERE id = $1 AND status = 'active'", [c.member_id]);
       scanned = String(c.id);
     } else if (qv.startsWith('QR.')) {
@@ -39,7 +45,7 @@ export default function (r) {
       const sc = await one(COUPON_SQL + ' WHERE c.id = $1', [scanned]);
       const v = couponView(sc);
       const ok = coupons.some((x) => x.id === v.id);
-      scannedCoupon = { id: v.id, code: v.code, title: v.title, usable: ok,
+      scannedCoupon = { id: v.id, code: v.code, title: v.title, usable: ok, scanProof: ok ? signToken({ sp: v.id, m: m.id }, 20 * 60) : undefined,
         reason: ok ? null : v.status === 'used' ? 'คูปองนี้ใช้ไปแล้ว' : v.status === 'expired' ? 'คูปองนี้หมดอายุแล้ว' : 'คูปองนี้ใช้กับร้านนี้ไม่ได้' };
     }
     return { member: { id: m.id, name: m.full_name, phone: maskPhone(m.phone) }, brand: t.brandId, balance: w[t.brandId].balance, tier: w[t.brandId].tier.name,
@@ -79,8 +85,15 @@ export default function (r) {
     const t = await posTerminal(req);
     return tx((db) => core.posWallet(db, { memberId: memberOf(body), brandId: t.brandId, subtotal: body.subtotal, ref: body.ref ? String(body.ref) : null, items: body.items }));
   });
+  // หน้าพนักงาน (mode = staff): ใช้คูปองได้เฉพาะที่สแกน QR จากบัตรสมาชิกของลูกค้า (scanProof จาก resolve) · หน้าลูกค้าสั่งเองกดใช้จากมือถือตัวเองได้
+  const needScan = (body, couponId, memberId) => {
+    if (body.mode !== 'staff') return;
+    const p = verifyToken(String(body.scanProof || ''));
+    if (!p || String(p.sp) !== String(couponId).replace(/\D/g, '') || p.m !== memberId) throw new HttpError(403, 'scan_required', 'ให้ลูกค้ากด "ใช้คูปอง" ในบัตรสมาชิก LINE แล้วสแกน QR คูปอง');
+  };
   r.post('/api/pos/coupons/reserve', async (req, body) => {
     const t = await posTerminal(req);
+    needScan(body, body.couponId, memberOf(body));
     const coupon = await tx((db) => core.reserveCoupon(db, { memberId: memberOf(body), brandId: t.brandId, couponId: body.couponId, ref: String(body.ref || ''), subtotal: body.subtotal, minutes: Number(body.minutes) || 30, items: body.items }));
     return { coupon };
   }, (b, out) => 'จองคูปอง ' + (out?.coupon?.code || ''));
@@ -95,6 +108,7 @@ export default function (r) {
   }, (b, out) => 'ยกเลิกการแลก คืน ' + (out?.restored ?? 0) + ' แต้ม');
   r.post('/api/pos/redeem', async (req, body) => {
     const t = await posTerminal(req);
+    if (body.mode === 'staff') throw new HttpError(403, 'redeem_in_line', 'ให้ลูกค้าแลกแต้มในบัตรสมาชิก LINE แล้วสแกน QR คูปอง');
     if (!body.ref) throw bad('ref_required', 'ต้องมีรหัสบิลที่กำลังเปิด');
     return tx((db) => core.redeemAtPos(db, { memberId: memberOf(body), brandId: t.brandId, rewardId: body.rewardId, ref: String(body.ref), subtotal: body.subtotal, minutes: Number(body.minutes) || 30, items: body.items }));
   }, (b, out) => 'แลกแต้ม คงเหลือ ' + (out?.balance ?? ''));
