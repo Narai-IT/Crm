@@ -21,8 +21,9 @@ export default function (r) {
       if (cq.expired) throw new HttpError(410, 'qr_expired', 'QR คูปองหมดอายุ ให้ลูกค้ากด "ใช้คูปอง" ในบัตรสมาชิกใหม่');
       const once = await one('INSERT INTO coupon_qr_used (jti) VALUES ($1) ON CONFLICT DO NOTHING RETURNING jti', [cq.jti]);
       if (!once) throw new HttpError(409, 'qr_used', 'QR นี้ถูกสแกนไปแล้ว ให้ลูกค้ากด "ใช้คูปอง" ในบัตรสมาชิกใหม่');
-      const c = await one('SELECT id, member_id FROM member_coupons WHERE id = $1', [cq.couponId]);
+      const c = await one('SELECT c.id, c.member_id, t.kind FROM member_coupons c JOIN coupon_templates t ON t.id = c.template_id WHERE c.id = $1', [cq.couponId]);
       if (!c) throw notFound('ไม่พบคูปอง');
+      if (c.kind === 'voucher') throw bad('is_voucher', 'นี่คือ QR ของ Voucher · ใช้ตอนเลือกวิธีชำระเงิน → Voucher (ไม่ใช่คูปองส่วนลด)');
       m = await one("SELECT * FROM members WHERE id = $1 AND status = 'active'", [c.member_id]);
       scanned = String(c.id);
     } else if (qv.startsWith('QR.')) {
@@ -38,7 +39,7 @@ export default function (r) {
     if (!m) throw notFound('ไม่พบสมาชิก');
     await tx((db) => core.autoIssue(db, m.id, t.brandId));
     const w = (await core.walletsOf({ q, one }, m.id));
-    const coupons = (await q(COUPON_SQL + " WHERE c.member_id = $1 AND c.status = 'ready' AND c.expires_at > now() AND (c.brand_id = $2 OR c.brand_id IS NULL) ORDER BY c.expires_at", [m.id, t.brandId])).map(couponView);
+    const coupons = (await q(COUPON_SQL + " WHERE c.member_id = $1 AND c.status = 'ready' AND c.expires_at > now() AND (c.brand_id = $2 OR c.brand_id IS NULL) AND t.kind <> 'voucher' ORDER BY c.expires_at", [m.id, t.brandId])).map(couponView);
     // คูปองที่สแกนใช้ไม่ได้แล้ว (ใช้ไป/หมดอายุ/คนละแบรนด์) → บอกเหตุผล แต่ยังได้สมาชิกไปสะสมแต้ม
     let scannedCoupon = null;
     if (scanned) {
@@ -59,9 +60,10 @@ export default function (r) {
     const res = await tx((db) => core.recordSale(db, { branchId: t.branchId, terminalId: t.terminalId, staffId: body.staffId || t.staffId, posBillId: String(body.posBillId),
       memberId: body.memberId || null, items: body.items, couponIds: body.couponIds || [], channel: ['pos', 'kiosk'].includes(body.channel) ? body.channel : (t.kind === 'kiosk' ? 'kiosk' : 'pos'),
       storeDiscount: body.storeDiscount, paidTotal: body.paidTotal, couponRef: body.couponRef ? String(body.couponRef) : null,
-      couponDiscount: body.couponIds && body.couponIds.length && body.couponDiscount !== undefined ? body.couponDiscount : undefined }));
+      couponDiscount: body.couponIds && body.couponIds.length && body.couponDiscount !== undefined ? body.couponDiscount : undefined,
+      vouchers: Array.isArray(body.vouchers) ? body.vouchers : [], voucherRef: body.voucherRef ? String(body.voucherRef) : null }));
     if (res.duplicate) return { duplicate: true, posBillId: res.txn.pos_bill_id, memberId: res.txn.member_id, points: res.txn.points_earned, total: res.txn.total };
-    return { duplicate: false, posBillId: res.txn.pos_bill_id, memberId: res.txn.member_id, subtotal: res.txn.subtotal, discount: res.discount, total: res.txn.total, points: res.points, balance: res.balance, coupons: res.coupons.map(String) };
+    return { duplicate: false, posBillId: res.txn.pos_bill_id, memberId: res.txn.member_id, subtotal: res.txn.subtotal, discount: res.discount, total: res.txn.total, points: res.points, balance: res.balance, coupons: res.coupons.map(String), vouchers: res.vouchers };
   }, (b, out) => out?.duplicate ? 'บิลนี้บันทึกแล้ว ไม่ให้แต้มซ้ำ' : '+' + (out?.points ?? 0) + ' แต้ม');
 
   // ── คูปอง/แลกแต้มที่หน้าร้าน ──
@@ -97,6 +99,15 @@ export default function (r) {
     const coupon = await tx((db) => core.reserveCoupon(db, { memberId: memberOf(body), brandId: t.brandId, couponId: body.couponId, ref: String(body.ref || ''), subtotal: body.subtotal, minutes: Number(body.minutes) || 30, items: body.items }));
     return { coupon };
   }, (b, out) => 'จองคูปอง ' + (out?.coupon?.code || ''));
+  // Voucher (ใช้แทนเงิน): ยิง QR / พิมพ์รหัส Voucher กระดาษ หรือสแกน QR จากบัตรสมาชิก LINE → ตรวจแล้วจองไว้กับบิลนี้ · ตัดเป็นใช้แล้วตอนบันทึกบิล
+  r.post('/api/pos/vouchers/check', async (req, body) => {
+    const t = await posTerminal(req);
+    return { voucher: await tx((db) => core.checkVoucher(db, { brandId: t.brandId, code: body.code, ref: String(body.ref || ''), minutes: body.minutes })) };
+  }, (b, out) => 'ตรวจ Voucher ' + (out?.voucher?.code || ''));
+  r.post('/api/pos/vouchers/release', async (req, body) => {
+    await posTerminal(req);
+    return tx((db) => core.releaseCoupon(db, { couponId: body.voucherId, ref: body.ref }));
+  });
   r.post('/api/pos/coupons/release', async (req, body) => {
     await posTerminal(req);
     return tx((db) => core.releaseCoupon(db, { couponId: body.couponId, ref: body.ref }));

@@ -143,12 +143,12 @@
     return '<div class="coupon' + (usable ? '' : ' off') + (c.image ? ' has-img' : '') + '">' + head + '<div class="in"><b>' + esc(c.title) + '</b>' +
       (c.desc ? '<small class="desc">' + esc(c.desc) + '</small>' : '') + '<small>' + esc(c.cond) + '</small>' +
       '<small style="color:' + (usable ? 'var(--ai)' : 'var(--muted)') + ';font-weight:600">' + (c.status === 'used' ? 'ใช้แล้ว ' + (c.usedAt ? date(c.usedAt) : '') : c.status === 'expired' ? 'หมดอายุแล้ว' : notYet ? 'เริ่มใช้ได้ ' + date(c.validFrom) + ' · ' + left(c.expiresAt) : left(c.expiresAt)) + '</small>' +
-      (usable && !notYet ? '<div class="cbtns"><button class="btn sm" data-a="code" data-v="' + c.id + '">' + (show ? 'ซ่อน' : 'ใช้คูปอง') + '</button>' +
+      (usable && !notYet ? '<div class="cbtns"><button class="btn sm" data-a="code" data-v="' + c.id + '">' + (show ? 'ซ่อน' : c.kind === 'voucher' ? 'ใช้ Voucher' : 'ใช้คูปอง') + '</button>' +
         (c.cancel ? '<button class="btn sm ghost" data-a="cancelAsk" data-v="' + c.id + '">ยกเลิกการแลก คืน ' + fmt(c.cancel.restore) + ' แต้ม</button>' : '') + '</div>'
         : usable && c.cancel ? '<div class="cbtns"><button class="btn sm ghost" data-a="cancelAsk" data-v="' + c.id + '">ยกเลิกการแลก คืน ' + fmt(c.cancel.restore) + ' แต้ม</button></div>' : '') +
       (usable && c.source === 'redeem' ? '<small class="muted">' + (c.cancel ? 'ยกเลิกคืนแต้มได้ถึง 23:59 วันนี้' : 'เลยวันที่แลกแล้ว ยกเลิกคืนแต้มไม่ได้') + '</small>' : '') +
       (show ? '<div class="code">' + couponQr(S.cqr && S.cqr.id === c.id ? S.cqr.token : null) + '<b class="cqr-left" id="cqr-left">' + cqrText() + '</b>' +
-        '<small>ให้พนักงานสแกนที่ร้าน · ใช้ได้ครั้งเดียว · แคปหน้าจอไปใช้ไม่ได้</small></div>' : '') + '</div></div>';
+        '<small>' + (c.kind === 'voucher' ? 'ใช้แทนเงินตอนชำระ บอกพนักงานว่าจ่ายด้วย Voucher แล้วให้สแกน · ยอดเกินไม่ทอน' : 'ให้พนักงานสแกนที่ร้าน') + ' · ใช้ได้ครั้งเดียว · แคปหน้าจอไปใช้ไม่ได้</small></div>' : '') + '</div></div>';
   }
   // นับถอยหลัง QR คูปอง แล้วขอใหม่เมื่อหมดเวลา
   let cqrTimer = null;
