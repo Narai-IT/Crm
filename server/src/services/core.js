@@ -2,7 +2,7 @@
 // ทุกฟังก์ชันรับ db ที่อยู่ใน transaction (จาก tx()) เพื่อให้ทั้งชุดสำเร็จหรือยกเลิกพร้อมกัน
 import crypto from 'node:crypto';
 import { conflict, bad, notFound, HttpError } from '../http.js';
-import { calcPoints, memberIdOf, randomCode, sha256, DEV, REQUIRE_OTP, tierOf, checkMemberPin } from '../util.js';
+import { calcPoints, memberIdOf, randomCode, sha256, DEV, REQUIRE_OTP, tierOf, checkMemberPin, readCouponQr } from '../util.js';
 import { queueMessage } from './line.js';
 import { loadCart, makePool, evalItems, consume } from './cart.js';
 
@@ -402,7 +402,7 @@ export async function claimCode(db, { memberId, brandId, code }) {
 }
 
 /* ---------------- คูปอง/แลกแต้มที่หน้าร้าน ---------------- */
-const COUPON_CHECK_SQL = `SELECT c.*, t.title, t.badge_big, t.badge_small, t.condition_text, t.description, t.image_id, t.discount_type, t.discount_value, t.min_spend, t.max_discount, t.valid_from, t.use_days,
+const COUPON_CHECK_SQL = `SELECT c.*, t.kind, t.title, t.badge_big, t.badge_small, t.condition_text, t.description, t.image_id, t.discount_type, t.discount_value, t.min_spend, t.max_discount, t.valid_from, t.use_days,
     t.free_items, t.free_mode, t.free_qty, t.free_need_all, t.cond_mode, t.cond_items, t.cond_qty, t.cond_scope
   FROM member_coupons c JOIN coupon_templates t ON t.id = c.template_id`;
 const bangkokDow = async (db) => (await db.one("SELECT extract(dow FROM now() AT TIME ZONE 'Asia/Bangkok')::int AS d")).d;
@@ -415,6 +415,7 @@ const plainDiscount = (c, left) => (c.discount_type === 'pct'
 const isVoucher = (c) => Number(c.discount_value) === 0 && !(c.free_items && c.free_items.length);
 // ตรวจคูปองที่ไม่เกี่ยวกับยอด/รายการในบิล (เจ้าของ สถานะ แบรนด์ วัน การจอง)
 function couponProblem(c, { memberId, brandId, dow, ref }) {
+  if (c.kind === 'voucher') return { code: 'is_voucher', msg: c.code + ' เป็น Voucher ใช้ตอนเลือกวิธีชำระเงิน → Voucher ไม่ใช่คูปองส่วนลด' };
   if (c.member_id !== memberId) return { code: 'coupon_not_owner', msg: 'คูปอง ' + c.code + ' ไม่ใช่ของสมาชิกนี้' };
   if (c.status !== 'ready' || c.expires_at < new Date()) return { code: 'coupon_unusable', status: 409, msg: 'คูปอง ' + c.code + ' ใช้แล้วหรือหมดอายุ' };
   if (c.brand_id && c.brand_id !== brandId) return { code: 'coupon_wrong_brand', msg: 'คูปอง ' + c.code + ' ใช้กับแบรนด์นี้ไม่ได้' };
@@ -450,7 +451,7 @@ const couponOut = (c, err, discount) => ({
   usable: !err, reason: err ? err.msg : null, discount: err ? 0 : discount, voucher: isVoucher(c)
 });
 // คูปองที่จองไว้กับบิลนี้ ตามลำดับที่กดใช้
-const heldOn = (db, memberId, ref) => (ref ? db.q(COUPON_CHECK_SQL + " WHERE c.member_id = $1 AND c.reserved_ref = $2 AND c.reserved_until > now() AND c.status = 'ready' ORDER BY c.reserved_at NULLS FIRST, c.id", [memberId, ref]) : []);
+const heldOn = (db, memberId, ref) => (ref ? db.q(COUPON_CHECK_SQL + " WHERE c.member_id = $1 AND c.reserved_ref = $2 AND c.reserved_until > now() AND c.status = 'ready' AND t.kind <> 'voucher' ORDER BY c.reserved_at NULLS FIRST, c.id", [memberId, ref]) : []);
 
 // กระเป๋าของสมาชิกที่หน้าร้าน: แต้ม + คูปองที่ใช้กับบิลนี้แล้ว (applied) + คูปองอื่น (ใช้เพิ่มได้ไหม ลดเท่าไร) + ของรางวัลที่แลกได้
 // คูปองที่ใช้อยู่แต่บิลเปลี่ยนจนใช้ไม่ได้แล้ว ถูกปล่อยและแจ้งใน dropped
@@ -472,7 +473,7 @@ export async function posWallet(db, { memberId, brandId, subtotal, ref, items })
   // ใช้เพิ่มได้ไหม = คิดต่อท้ายคูปองที่ใช้อยู่
   const extra = (c) => { const err = couponProblem(c, ctx); if (err) return { err, discount: 0 }; const r = billCheck([...kept, c], { subtotal: sub, cart }).pop(); return r; };
   const full = kept.length >= MAX_COUPONS_PER_BILL ? { code: 'coupon_limit', msg: 'ใช้คูปองได้สูงสุด ' + MAX_COUPONS_PER_BILL + ' ใบต่อบิล' } : null;
-  const cs = await db.q(COUPON_CHECK_SQL + " WHERE c.member_id = $1 AND c.status = 'ready' AND c.expires_at > now() AND (c.brand_id = $2 OR c.brand_id IS NULL) ORDER BY c.expires_at", [memberId, brandId]);
+  const cs = await db.q(COUPON_CHECK_SQL + " WHERE c.member_id = $1 AND c.status = 'ready' AND c.expires_at > now() AND (c.brand_id = $2 OR c.brand_id IS NULL) AND t.kind <> 'voucher' ORDER BY c.expires_at", [memberId, brandId]);
   const keptIds = new Set(kept.map((c) => c.id));
   const coupons = cs.filter((c) => !keptIds.has(c.id)).map((c) => { const r = extra(c); const err = r.err || full; return couponOut(c, err, r.discount); });
   // ของรางวัล: ตรวจกับบิลนี้ด้วย แลกแล้วจะใช้กับบิลได้ทันที · fits = false ไม่ให้กดแลกเปล่า ๆ
@@ -545,6 +546,106 @@ export async function checkMemberCode(db, { memberId, code, brandId }) {
   return false;
 }
 
+/* ---------------- Voucher (ใช้แทนเงินตอนชำระ) ---------------- */
+// Voucher กระดาษ: ไม่ผูกสมาชิก ใครถือมาก็ใช้ได้ (พนักงานยิง QR หรือพิมพ์รหัสบนใบ)
+// Voucher ในบัตรสมาชิก LINE: ใช้ได้เฉพาะสแกน QR (CQ.) จากบัตรของเจ้าของ · พิมพ์รหัสไม่ได้ กันคนอื่นเอารหัสไปใช้
+export const MAX_VOUCHERS_PER_BILL = 10;
+export const normVoucherCode = (raw) => {
+  const a = String(raw || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+  return /^VC[A-Z0-9]{8}$/.test(a) ? 'VC-' + a.slice(2, 6) + '-' + a.slice(6) : String(raw || '').trim().toUpperCase();
+};
+export const voucherOut = (c) => ({ id: String(c.id), code: c.code, title: c.title, value: Number(c.discount_value), expiresAt: c.expires_at,
+  memberId: c.member_id || null, image: c.image_id ? '/api/public/coupon-images/' + c.image_id : null });
+function voucherProblem(c, { brandId, dow, ref }) {
+  if (c.kind !== 'voucher') return { code: 'not_voucher', msg: c.code + ' เป็นคูปองส่วนลด ไม่ใช่ Voucher · ใช้ที่ช่องสมาชิกในหน้าสรุปบิล' };
+  if (c.status === 'used') return { code: 'voucher_used', status: 409, msg: 'Voucher ' + c.code + ' ใช้ไปแล้ว' };
+  if (c.status !== 'ready' || c.expires_at < new Date()) return { code: 'voucher_unusable', status: 409, msg: 'Voucher ' + c.code + ' หมดอายุหรือถูกยกเลิกแล้ว' };
+  if (c.brand_id && c.brand_id !== brandId) return { code: 'voucher_wrong_brand', msg: 'Voucher ' + c.code + ' ใช้กับร้านนี้ไม่ได้' };
+  if (c.valid_from && c.valid_from > new Date()) return { code: 'voucher_not_started', msg: 'Voucher ' + c.code + ' ยังไม่ถึงวันที่ใช้ได้' };
+  if (!(c.use_days & (1 << dow))) return { code: 'voucher_wrong_day', msg: 'Voucher ' + c.code + ' ใช้วันนี้ไม่ได้' };
+  if (c.reserved_ref && c.reserved_until > new Date() && c.reserved_ref !== ref) return { code: 'voucher_reserved', status: 409, msg: 'Voucher ' + c.code + ' กำลังถูกใช้กับบิลอื่นอยู่' };
+  return null;
+}
+// ออก Voucher กระดาษเป็นชุด (หลังบ้าน) · รหัส VC-XXXX-XXXX (สุ่ม 8 ตัว เดาไม่ได้)
+export async function issuePaperVouchers(db, { templateId, count, by }) {
+  const n = parseInt(count, 10);
+  if (!(n >= 1 && n <= 500)) throw bad('count_invalid', 'สร้างได้ครั้งละ 1-500 ใบ');
+  const t = await db.one("SELECT * FROM coupon_templates WHERE id = $1 AND kind = 'voucher' FOR UPDATE", [templateId]);
+  if (!t) throw notFound('ไม่พบ Voucher');
+  if (!t.is_active) throw bad('voucher_closed', 'Voucher นี้ปิดใช้งานอยู่');
+  if (t.max_issue) {
+    const have = await db.one('SELECT count(*)::int AS n FROM member_coupons WHERE template_id = $1', [t.id]);
+    if (have.n + n > t.max_issue) throw conflict('coupon_sold_out', 'เกินจำนวนที่ตั้งไว้ (เหลือออกได้อีก ' + Math.max(0, t.max_issue - have.n) + ' ใบ)');
+  }
+  const byDays = new Date(Date.now() + t.valid_days * 864e5);
+  const expires = t.validity === 'dates' && t.valid_to ? t.valid_to : (t.valid_to && t.valid_to < byDays ? t.valid_to : byDays);
+  const batch = 'batch:' + Date.now().toString(36);
+  const out = [];
+  for (let i = 0; i < n; i++) {
+    let row = null;
+    for (let k = 0; k < 6 && !row; k++) {
+      row = await db.one(`INSERT INTO member_coupons (code, template_id, member_id, brand_id, source, source_ref, expires_at)
+        VALUES ($1,$2,NULL,$3,'voucher',$4,$5) ON CONFLICT (code) DO NOTHING RETURNING *`, ['VC-' + randomCode(4) + '-' + randomCode(4), t.id, t.brand_id, batch + ':' + (i + 1), expires]);
+    }
+    if (!row) throw new Error('could not allocate voucher code');
+    out.push(row);
+  }
+  await audit(db, { type: 'staff', id: by.id, name: by.name }, 'issue_vouchers', { type: 'coupon', id: String(t.id) }, t.title + ' · ' + n + ' ใบ · ' + batch);
+  return { batch, vouchers: out };
+}
+// POS: ตรวจ Voucher แล้วจองไว้กับบิลที่กำลังเปิด (ref) · ใช้จริงตอนบันทึกบิล
+export async function checkVoucher(db, { brandId, code, ref, minutes = 30 }) {
+  if (!ref) throw bad('ref_required', 'ต้องมีรหัสบิลที่กำลังเปิด');
+  const raw = String(code || '').trim();
+  if (!raw) throw bad('code_required', 'สแกน QR หรือพิมพ์รหัส Voucher');
+  let c = null;
+  if (raw.startsWith('CQ.')) {
+    const cq = readCouponQr(raw);
+    if (!cq) throw bad('qr_invalid', 'QR ไม่ถูกต้อง');
+    if (cq.expired) throw new HttpError(410, 'qr_expired', 'QR หมดอายุ ให้ลูกค้ากด "ใช้" ในบัตรสมาชิกใหม่');
+    c = await db.one(COUPON_CHECK_SQL + ' WHERE c.id = $1 FOR UPDATE OF c', [cq.couponId]);
+    if (c && c.kind === 'voucher') {
+      const once = await db.one('INSERT INTO coupon_qr_used (jti) VALUES ($1) ON CONFLICT DO NOTHING RETURNING jti', [cq.jti]);
+      if (!once) throw conflict('qr_used', 'QR นี้ถูกสแกนไปแล้ว ให้ลูกค้ากด "ใช้" ในบัตรสมาชิกใหม่');
+    }
+  } else {
+    c = await db.one(COUPON_CHECK_SQL + ' WHERE c.code = $1 FOR UPDATE OF c', [normVoucherCode(raw)]);
+    if (c && c.member_id && c.kind === 'voucher') throw new HttpError(403, 'voucher_scan_required', 'Voucher นี้อยู่ในบัตรสมาชิก LINE ให้ลูกค้ากด "ใช้" ในบัตร แล้วสแกน QR');
+  }
+  if (!c) throw notFound('ไม่พบ Voucher นี้');
+  const p = voucherProblem(c, { brandId, dow: await bangkokDow(db), ref });
+  if (p) throw p.status === 409 ? conflict(p.code, p.msg) : bad(p.code, p.msg);
+  await db.q('UPDATE member_coupons SET reserved_ref = $2, reserved_until = now() + make_interval(mins => $3::int), reserved_at = COALESCE(CASE WHEN reserved_ref = $2 THEN reserved_at END, clock_timestamp()) WHERE id = $1',
+    [c.id, ref, Math.min(180, Math.max(5, parseInt(minutes, 10) || 30))]);
+  const m = c.member_id ? await db.one('SELECT full_name FROM members WHERE id = $1', [c.member_id]) : null;
+  return { ...voucherOut(c), memberName: m ? m.full_name : null };
+}
+// ตอนบันทึกบิล: ตัด Voucher เป็นใช้แล้ว · POS รับชำระไปแล้วจริง ถ้าใบมีปัญหา (เช่นส่งบิลช้าจนหมดอายุ) ยังบันทึกบิล แต่จดไว้ให้ตรวจ
+async function useVouchers(db, { txn, brandId, branchId, staffId, terminalId, list, ref }) {
+  const items = (Array.isArray(list) ? list : []).slice(0, MAX_VOUCHERS_PER_BILL)
+    .map((v) => ({ id: parseInt(String(v && v.id).replace(/\D/g, ''), 10), amount: Math.max(0, Number(v && v.amount) || 0) })).filter((v) => Number.isFinite(v.id));
+  if (!items.length) return [];
+  const dow = await bangkokDow(db);
+  const problems = []; const used = []; let total = 0;
+  for (const v of items) {
+    const c = await db.one(COUPON_CHECK_SQL + ' WHERE c.id = $1 FOR UPDATE OF c', [v.id]);
+    if (!c) { problems.push('ไม่พบ Voucher #' + v.id); continue; }
+    // ใช้ไปแล้ว/ถูกยกเลิก/ไม่ใช่ Voucher/ถูกบิลอื่นจองอยู่ = ไม่ตัดซ้ำ แค่จดไว้ · หมดอายุระหว่างรอส่งบิล = ตัดตามที่ใช้จริงที่หน้าร้าน
+    const p = voucherProblem(c, { brandId, dow, ref: ref || c.reserved_ref });
+    const lateOnly = p && (p.code === 'voucher_unusable' || p.code === 'voucher_wrong_day') && c.status !== 'void' && c.kind === 'voucher';
+    if (p && !lateOnly) { problems.push(p.msg); continue; }
+    if (p) problems.push(p.msg + ' (ใช้ที่หน้าร้านไปแล้ว จึงตัดเป็นใช้แล้ว)');
+    const amount = Math.min(v.amount || Number(c.discount_value), Number(c.discount_value));
+    await db.q("UPDATE member_coupons SET status = 'used', used_at = now(), used_txn_id = $2, used_branch_id = $3, used_by = $4, used_amount = $5, reserved_ref = NULL, reserved_until = NULL WHERE id = $1",
+      [c.id, txn.id, branchId, staffId || null, amount]);
+    total += amount; used.push(String(c.id));
+  }
+  total = Math.round(total * 100) / 100;
+  if (total) await db.q('UPDATE sales_transactions SET voucher_total = $2 WHERE id = $1', [txn.id, total]);
+  if (problems.length) await audit(db, { type: 'pos', id: terminalId }, 'voucher_problem', { type: 'bill', id: branchId + ':' + txn.pos_bill_id }, problems.join(' · '));
+  return used;
+}
+
 /* ---------------- ขาย / คืนเงิน (POS) ---------------- */
 export async function recordSale(db, s) {
   const br = await db.one('SELECT b.*, r.short_name FROM branches b JOIN brands r ON r.id = b.brand_id WHERE b.id = $1', [s.branchId]);
@@ -610,6 +711,7 @@ export async function recordSale(db, s) {
   if (!txn) return { duplicate: true, txn: await db.one('SELECT * FROM sales_transactions WHERE branch_id = $1 AND pos_bill_id = $2', [s.branchId, s.posBillId]) };
 
   for (const c of used) await db.q("UPDATE member_coupons SET status = 'used', used_at = now(), used_txn_id = $2, used_branch_id = $3, used_by = $4, reserved_ref = NULL, reserved_until = NULL WHERE id = $1", [c.id, txn.id, s.branchId, s.staffId || null]);
+  const vouchers = await useVouchers(db, { txn, brandId: br.brand_id, branchId: s.branchId, staffId: s.staffId, terminalId: s.terminalId, list: s.vouchers, ref: s.voucherRef });
   await db.q('UPDATE branches SET pos_last_seen = now() WHERE id = $1', [s.branchId]);
 
   let balance = null;
@@ -628,7 +730,7 @@ export async function recordSale(db, s) {
     if (ident) await queueMessage(db, { brandId: br.brand_id, lineUserId: ident.line_user_id, kind: 'points',
       data: { billId: s.posBillId, branch: br.name, total, discount, pts: points, bal: balance, memberId: member.id } });
   }
-  return { txn, points, balance, discount, coupons: used.map((c) => c.id) };
+  return { txn, points, balance, discount, coupons: used.map((c) => c.id), vouchers };
 }
 
 export async function refundSale(db, { branchId, posBillId, posRefundId, amount, by }) {
@@ -653,7 +755,7 @@ export async function refundSale(db, { branchId, posBillId, posRefundId, amount,
   const refund = await db.one('INSERT INTO refunds (txn_id, pos_refund_id, amount, points_reversed, created_by) VALUES ($1,$2,$3,$4,$5) RETURNING *', [t.id, rid, amt, reversed, by || null]);
   await db.q('UPDATE sales_transactions SET status = $2 WHERE id = $1', [t.id, full ? 'refunded' : 'partial_refund']);
   let returned = 0;
-  if (full) returned = (await db.q("UPDATE member_coupons SET status = 'ready', used_at = NULL, used_txn_id = NULL, used_branch_id = NULL WHERE used_txn_id = $1 AND expires_at > now() RETURNING id", [t.id])).length;
+  if (full) returned = (await db.q("UPDATE member_coupons SET status = 'ready', used_at = NULL, used_txn_id = NULL, used_branch_id = NULL, used_amount = NULL WHERE used_txn_id = $1 AND expires_at > now() RETURNING id", [t.id])).length;
   await audit(db, { type: 'staff', id: by }, 'refund', { type: 'sale', id: posBillId }, 'คืนเงิน ' + amt + ' บาท · หักแต้ม ' + reversed);
   return { refund, pointsReversed: reversed, couponsReturned: returned };
 }

@@ -247,7 +247,8 @@
     ['code', 'กรอกโค้ด', 'ลูกค้าได้คูปองเมื่อกรอกโค้ดในหน้าสมาชิก เมนู "คูปอง" (คนละ 1 ครั้ง)'],
     ['birthday', 'วันเกิด', 'แจกอัตโนมัติในเดือนเกิดของสมาชิก ปีละ 1 ครั้ง'],
     ['welcome', 'ต้อนรับ', 'แจกทันทีเมื่อสมัครสมาชิกผ่าน OA ของแบรนด์นี้'],
-    ['gift', 'ของขวัญ', 'พนักงานมอบให้รายคนจากเมนู "สมาชิก" หรือตั้งให้ระบบส่งอัตโนมัติตามรอบ เช่น ทุกวันที่ 1 ของเดือน']
+    ['gift', 'ของขวัญ', 'พนักงานมอบให้รายคนจากเมนู "สมาชิก" หรือตั้งให้ระบบส่งอัตโนมัติตามรอบ เช่น ทุกวันที่ 1 ของเดือน'],
+    ['voucher', 'Voucher', 'ใช้แทนเงินตอนชำระ (ไม่ใช่ส่วนลด) · ยอดเกินบิลไม่ทอน · ออกเป็น Voucher กระดาษให้พิมพ์แจก (ปุ่ม "Voucher กระดาษ" ในตาราง) หรือมอบให้สมาชิกรายคนจากเมนู "สมาชิก" (อยู่ในบัตร LINE ใช้ได้เฉพาะเจ้าของ)']
   ];
   const KIND_NAME = Object.fromEntries(KINDS.map((k) => [k[0], k[1]]));
   const TIER_NAME = { all: 'ทุกระดับ', SILVER: 'Silver', GOLD: 'Gold', PLATINUM: 'Platinum', DIAMOND: 'Diamond' };
@@ -267,7 +268,7 @@
   const DAY_SHORT = ['อา', 'จ', 'อ', 'พ', 'พฤ', 'ศ', 'ส'];
   const daysText = (mask) => (mask === 127 ? 'ทุกวัน' : DAY_SHORT.filter((_, i) => mask & (1 << i)).join(' '));
   const couponStyle = (t) => (t.badge_big === 'ฟรี' ? 'free' : t.discount_type);
-  const valueText = (t) => (couponStyle(t) === 'free' ? 'ของฟรี (มูลค่า ' + fmt(t.discount_value) + ' บาท)' : disc(t.discount_type, t.discount_value) + (t.max_discount ? ' สูงสุด ' + fmt(t.max_discount) + ' บาท' : ''));
+  const valueText = (t) => (t.kind === 'voucher' ? 'มูลค่า ' + fmt(t.discount_value) + ' บาท' : couponStyle(t) === 'free' ? 'ของฟรี (มูลค่า ' + fmt(t.discount_value) + ' บาท)' : disc(t.discount_type, t.discount_value) + (t.max_discount ? ' สูงสุด ' + fmt(t.max_discount) + ' บาท' : ''));
   function couponState(t) {
     const now = Date.now();
     if (!t.is_active) return ['ปิด', 'pill off'];
@@ -292,9 +293,9 @@
               (t.auto_send ? '<br><small class="muted">ส่ง' + esc(schedText({ kind: t.sched_kind, day: t.sched_day, date: t.sched_date, time: t.sched_time })) + '</small><br><small class="muted">รอบถัดไป ' + (t.next_round && t.is_active ? esc(dt(t.next_round)) : '-') + '</small>' : '') + '</td>' +
             '<td>' + esc(valueText(t)) + (Number(t.min_spend) ? '<br><small class="muted">ขั้นต่ำ ' + fmt(t.min_spend) + ' บาท</small>' : '') + '</td>' +
             '<td><small>' + (t.validity === 'dates' ? date(t.valid_from) + ' - ' + date(t.valid_to) : t.valid_days + ' วันหลังได้รับ') + '<br>' + daysText(t.use_days) + '</small></td>' +
-            '<td class="r num">' + fmt(t.issued) + (t.max_issue ? ' / ' + fmt(t.max_issue) : '') + '<br><small class="muted">ใช้แล้ว ' + fmt(t.used) + '</small></td>' +
+            '<td class="r num">' + fmt(t.issued) + (t.max_issue ? ' / ' + fmt(t.max_issue) : '') + '<br><small class="muted">ใช้แล้ว ' + fmt(t.used) + '</small>' + (t.kind === 'voucher' && t.paper ? '<br><small class="muted">กระดาษ ' + fmt(t.paper) + '</small>' : '') + '</td>' +
             '<td><span class="' + st[1] + '">' + st[0] + '</span></td>' +
-            '<td class="r" style="white-space:nowrap">' + (t.brand_id || S.staff.role === 'super' ? '<button class="btn ghost sm" data-a="editCoupon" data-v="' + t.id + '">แก้ไข</button> <button class="btn ghost sm" data-a="toggleCoupon" data-v="' + t.id + '">' + (t.is_active ? 'ปิด' : 'เปิด') + '</button> <button class="btn danger sm" data-a="delCoupon" data-v="' + t.id + '">ลบ</button>' : '') + '</td></tr>';
+            '<td class="r" style="white-space:nowrap">' + (t.brand_id || S.staff.role === 'super' ? (t.kind === 'voucher' ? '<button class="btn sm" data-a="vouchers" data-v="' + t.id + '">Voucher กระดาษ</button> ' : '') + '<button class="btn ghost sm" data-a="editCoupon" data-v="' + t.id + '">แก้ไข</button> <button class="btn ghost sm" data-a="toggleCoupon" data-v="' + t.id + '">' + (t.is_active ? 'ปิด' : 'เปิด') + '</button> <button class="btn danger sm" data-a="delCoupon" data-v="' + t.id + '">ลบ</button>' : '') + '</td></tr>';
         }).join('') + '</tbody></table></div>' : '<p class="muted">ยังไม่มีคูปองประเภทนี้</p>') + '</div>';
   }
   // ของขวัญ: พนักงานมอบรายคน หรือส่งอัตโนมัติตามรอบ
@@ -400,13 +401,13 @@
         '<div class="upl-side"><label class="btn ghost sm" for="c-file">เลือกรูป</label><input id="c-file" type="file" accept="image/png,image/jpeg,image/gif,image/webp" class="sr">' + (S.edit.imageUrl ? '<button type="button" class="btn ghost sm" data-a="dropImage">ลบรูป</button>' : '') +
         '<span class="hint">แนะนำ 810 × 270 px (3:1) · PNG, JPG, GIF · ไม่เกิน 2 MB · ระบบย่อรูปให้อัตโนมัติ</span></div></div></div>' +
       '<div class="grid">' +
-        '<div class="field"><label for="c-type">ส่วนลด</label><select id="c-type" name="type"' + lockAttr + '><option value="baht"' + (style === 'baht' ? ' selected' : '') + '>ลดเป็นบาท</option><option value="pct"' + (style === 'pct' ? ' selected' : '') + '>ลดเป็น %</option><option value="free"' + (style === 'free' ? ' selected' : '') + '>ของฟรี</option></select></div>' +
+        '<div class="field" data-show="notv"><label for="c-type">ส่วนลด</label><select id="c-type" name="type"' + lockAttr + '><option value="baht"' + (style === 'baht' ? ' selected' : '') + '>ลดเป็นบาท</option><option value="pct"' + (style === 'pct' ? ' selected' : '') + '>ลดเป็น %</option><option value="free"' + (style === 'free' ? ' selected' : '') + '>ของฟรี</option></select></div>' +
         '<div class="field" data-show="val"><label for="c-val" id="c-val-l">มูลค่า</label><input id="c-val" name="value" type="number" min="1" step="0.01" required value="' + esc(Number(x.discount_value) || '') + '"' + lockAttr + '></div>' +
         '<div class="field" data-show="pct"><label for="c-max">ลดสูงสุด (บาท)</label><input id="c-max" name="maxDiscount" type="number" min="0" placeholder="ไม่จำกัด" value="' + esc(x.max_discount ? Number(x.max_discount) : '') + '"' + lockAttr + '></div>' +
-        '<div class="field"><label for="c-min">ยอดซื้อขั้นต่ำ (บาท)</label><input id="c-min" name="min" type="number" min="0" value="' + esc(Number(x.min_spend) || 0) + '"' + lockAttr + '></div>' +
+        '<div class="field" data-show="notv"><label for="c-min">ยอดซื้อขั้นต่ำ (บาท)</label><input id="c-min" name="min" type="number" min="0" value="' + esc(Number(x.min_spend) || 0) + '"' + lockAttr + '></div>' +
         '<div class="field" data-show="code"><label for="c-code">โค้ดที่ลูกค้ากรอก</label><input id="c-code" name="code" maxlength="20" autocapitalize="characters" placeholder="เช่น HUMLAI50" value="' + esc(x.code || '') + '"' + lockAttr + '></div>' +
       '</div>' +
-      itemSections(locked, x) +
+      '<div data-show="notv">' + itemSections(locked, x) + '</div>' +
       '<fieldset class="field" data-show="welcome"><legend>ให้กับสมาชิกที่สมัครที่สาขา</legend><div class="row-in">' + radio('wscope', 'all', x.branch_ids ? 'some' : 'all', 'ทุกสาขา') + radio('wscope', 'some', x.branch_ids ? 'some' : 'all', 'เฉพาะสาขาที่เลือก') + '</div>' +
         '<div class="row-in" data-show="wbr">' + brand().branches.map((br) => '<label class="check"><input type="checkbox" name="wb" value="' + esc(br.id) + '"' + ((x.branch_ids || []).includes(br.id) ? ' checked' : '') + '>' + esc(br.name) + '</label>').join('') + '</div>' +
         '<span class="hint">ใช้สาขาที่สมัครที่ลูกค้าเลือกในหน้าสมัคร · ตั้งคูปองต้อนรับหลายใบให้แต่ละสาขาต่างกันได้</span></fieldset>' +
@@ -428,8 +429,9 @@
   function couponBody(el) {
     const v = (n) => { const x = el.elements[n]; return x ? (x.type === 'checkbox' ? x.checked : x.value.trim()) : ''; };
     let mask = 0; for (let i = 0; i < 7; i++) if (v('d' + i)) mask |= 1 << i;
-    return { brand: S.brand, kind: v('kind'), title: v('title'), description: v('description'), imageId: S.edit.imageId || null, type: v('type'), value: v('value'), maxDiscount: v('maxDiscount'),
-      min: v('min'), code: v('code'), validity: v('validity'), validFrom: v('validFrom'), validTo: v('validTo'), days: v('days'), issueFrom: v('issueFrom'), issueTo: v('issueTo'),
+    const vch = v('kind') === 'voucher';
+    return { brand: S.brand, kind: v('kind'), title: v('title'), description: v('description'), imageId: S.edit.imageId || null, type: vch ? 'baht' : v('type'), value: v('value'), maxDiscount: v('maxDiscount'),
+      min: vch ? 0 : v('min'), code: v('code'), validity: v('validity'), validFrom: v('validFrom'), validTo: v('validTo'), days: v('days'), issueFrom: v('issueFrom'), issueTo: v('issueTo'),
       tiers: [...el.querySelectorAll('input[name="tiers"]:checked')].map((x) => x.value), followersOnly: v('followersOnly') === '1', useDays: mask,
       autoSend: v('kind') === 'gift' && v('autoSend') === '1', schedKind: v('schedKind'), schedDay: v('schedKind') === 'weekly' ? v('schedDayW') : v('schedDayM'), schedDate: v('schedDate'), schedTime: v('schedTime'),
       roundLimit: v('rlim') === '1' ? v('roundLimit') : '', roundPick: v('roundPick'), perMember: v('perMember'), notifyLine: v('notifyLine'),
@@ -438,24 +440,24 @@
   }
   function syncCoupon(el) {
     const b = couponBody(el);
-    const show = { pct: b.type === 'pct', code: b.kind === 'code', welcome: b.kind === 'welcome', wbr: b.kind === 'welcome' && el.elements.wscope && el.elements.wscope.value === 'some', dates: b.validity === 'dates', days: b.validity !== 'dates', limit: el.elements.limit && el.elements.limit.value === '1',
+    const show = { notv: b.kind !== 'voucher', pct: b.type === 'pct' && b.kind !== 'voucher', code: b.kind === 'code', welcome: b.kind === 'welcome', wbr: b.kind === 'welcome' && el.elements.wscope && el.elements.wscope.value === 'some', dates: b.validity === 'dates', days: b.validity !== 'dates', limit: el.elements.limit && el.elements.limit.value === '1',
       gift: b.kind === 'gift', auto: b.autoSend, sm: b.schedKind === 'monthly', sw: b.schedKind === 'weekly', so: b.schedKind === 'once', rlim: el.elements.rlim && el.elements.rlim.value === '1',
       aud: b.kind === 'general' || b.kind === 'birthday' || b.autoSend,
-      free: b.type === 'free', val: !(b.type === 'free' && S.edit.free.length), fmenu: S.edit.free.length > 1, fall: b.freeMode === 'all', cond: !!b.condMode, notfree: b.type !== 'free' };
+      free: b.type === 'free' && b.kind !== 'voucher', val: !(b.type === 'free' && S.edit.free.length), fmenu: S.edit.free.length > 1, fall: b.freeMode === 'all', cond: !!b.condMode, notfree: b.type !== 'free' };
     if (el.elements.value) { el.elements.value.required = show.val; el.elements.value.disabled = !show.val || !!S.edit.locked; }
     el.querySelectorAll('[data-show]').forEach((x) => { x.hidden = !show[x.dataset.show]; });
     const k = KINDS.find((x) => x[0] === b.kind); document.getElementById('kind-hint').textContent = k ? k[2] : '';
     if (b.autoSend) previewRound(b);
-    document.getElementById('c-val-l').textContent = b.type === 'free' ? 'ราคาของที่แจก (บาท)' : b.type === 'pct' ? 'ลดกี่ %' : 'ลดกี่บาท';
-    const big = b.type === 'free' ? 'ฟรี' : b.type === 'pct' ? '-' + (b.value || 0) + '%' : '-' + (b.value || 0);
+    document.getElementById('c-val-l').textContent = b.kind === 'voucher' ? 'มูลค่า Voucher (บาท)' : b.type === 'free' ? 'ราคาของที่แจก (บาท)' : b.type === 'pct' ? 'ลดกี่ %' : 'ลดกี่บาท';
+    const big = b.kind === 'voucher' ? '฿' + (b.value || 0) : b.type === 'free' ? 'ฟรี' : b.type === 'pct' ? '-' + (b.value || 0) + '%' : '-' + (b.value || 0);
     const exp = b.validity === 'dates' ? (b.validTo ? date(b.validTo + 'T12:00:00+07:00') : '-') : (b.days || 30) + ' วันหลังได้รับ';
     const row = (k2, v2) => '<div class="kv"><span>' + k2 + '</span><span>' + esc(v2) + '</span></div>';
     document.getElementById('c-prev').innerHTML =
       (S.edit.imageUrl ? '<img class="prev-img" alt="" src="' + esc(S.edit.imageUrl) + '">' : '<div class="prev-img ph"><b>' + esc(big) + '</b></div>') +
-      '<div class="prev-body"><b>' + esc(b.title || 'ชื่อคูปอง') + '</b>' + (b.description ? '<p>' + esc(b.description) + '</p>' : '') + '<span class="prev-btn">ใช้คูปอง</span></div>' +
+      '<div class="prev-body"><b>' + esc(b.title || 'ชื่อคูปอง') + '</b>' + (b.description ? '<p>' + esc(b.description) + '</p>' : '') + '<span class="prev-btn">' + (b.kind === 'voucher' ? 'ใช้ Voucher' : 'ใช้คูปอง') + '</span></div>' +
       '<div class="prev-sec"><b>การใช้งาน</b>' + (b.validity === 'dates' ? row('วันที่เริ่มต้น', b.validFrom ? date(b.validFrom + 'T12:00:00+07:00') : '-') : '') + row('วันหมดอายุ', exp) + row('ใช้ได้', '1 ครั้ง') + (b.kind === 'code' ? row('โค้ด', (b.code || '-').toUpperCase()) : '') + '</div>' +
       (b.kind === 'welcome' ? '<div class="prev-sec"><b>ได้เมื่อ</b>' + row('สมัครที่สาขา', b.branchIds ? (b.branchIds.length ? b.branchIds.map(branchLabel).join(', ') : 'ยังไม่ได้เลือก') : 'ทุกสาขา') + '</div>' : '') +
-      '<div class="prev-sec"><b>เงื่อนไข</b>' + row('ขั้นต่ำ', Number(b.min) ? fmt(b.min) + ' บาท' : 'ไม่มี') + (b.type === 'pct' && Number(b.maxDiscount) ? row('ลดสูงสุด', fmt(b.maxDiscount) + ' บาท') : '') + row('ใช้ได้เมื่อ', daysText(b.useDays || 0) || '-') +
+      '<div class="prev-sec"><b>เงื่อนไข</b>' + (b.kind === 'voucher' ? row('ใช้แทนเงิน', fmt(b.value) + ' บาท · เกินไม่ทอน') : row('ขั้นต่ำ', Number(b.min) ? fmt(b.min) + ' บาท' : 'ไม่มี')) + (b.type === 'pct' && Number(b.maxDiscount) ? row('ลดสูงสุด', fmt(b.maxDiscount) + ' บาท') : '') + row('ใช้ได้เมื่อ', daysText(b.useDays || 0) || '-') +
         ((b.kind === 'general' || b.kind === 'birthday' || b.autoSend) && b.tiers.length < TIER_KEYS.length ? row('ระดับ', tiersText(b.tiers)) : '') +
         (b.type === 'free' && S.edit.free.length ? row('ได้ฟรี', freeText(b, S.edit.free)) : '') +
         (b.condMode && S.edit.cond.items.length ? row('ต้องมีในบิล', S.edit.cond.items.map((x) => (x.type === 'cat' ? 'หมวด' : '') + x.name).join(b.condMode === 'all' ? ' และ ' : ' หรือ ') + (Number(b.condQty) > 1 ? ' รวม ' + b.condQty + ' ชิ้น' : '')) : '') +
@@ -860,6 +862,45 @@
       list.map((x) => '<tr><td style="white-space:nowrap">' + date(x.at) + ' ' + new Date(x.at).toTimeString().slice(0, 5) + '</td><td>' + esc(x.actor_name || x.actor_id || x.actor_type) + '</td><td>' + esc(x.action) + '</td><td>' + esc(x.detail || '') + '</td></tr>').join('') + '</tbody></table></div>' : '<p class="muted">ยังไม่มีรายการ</p>') + '</div>';
   }
 
+  // Voucher กระดาษ: ออกเป็นชุด · กรองตามชุด/สถานะ · พิมพ์ใบที่ยังไม่ใช้ (มี QR ให้ POS ยิง) · ยกเลิกใบที่หาย
+  const V_STATUS = { ready: ['ยังไม่ใช้', 'pill'], used: ['ใช้แล้ว', 'pill off'], void: ['ยกเลิก', 'pill off'], expired: ['หมดอายุ', 'pill off'] };
+  const vFiltered = (e) => e.data.vouchers.filter((x) => !x.member_id && (!e.batch || x.batch === e.batch) && (!e.status || x.status === e.status));
+  function voucherPanel(e) {
+    const paper = e.data.vouchers.filter((x) => !x.member_id); const batches = [...new Set(paper.map((x) => x.batch))];
+    const list = vFiltered(e); const ready = list.filter((x) => x.status === 'ready');
+    const members = e.data.vouchers.filter((x) => x.member_id);
+    return '<form class="row-in" data-f="vissue" data-v="' + e.id + '" style="margin-bottom:12px"><label for="v-n">ออกใหม่</label><input id="v-n" name="count" type="number" min="1" max="500" value="10" style="width:90px" required> ใบ <button class="btn">ออก Voucher</button>' +
+        '<span class="hint">มูลค่าใบละ ' + fmt(e.data.template.value) + ' บาท · รหัสสุ่ม VC-XXXX-XXXX ใช้ได้ครั้งเดียว</span></form>' +
+      '<div class="row-in" style="margin-bottom:8px"><select data-vf="batch" aria-label="ชุด"><option value="">ทุกชุด</option>' + batches.map((b) => '<option value="' + esc(b) + '"' + (e.batch === b ? ' selected' : '') + '>ชุด ' + esc(b) + ' (' + paper.filter((x) => x.batch === b).length + ' ใบ)</option>').join('') + '</select>' +
+        '<select data-vf="status" aria-label="สถานะ"><option value="">ทุกสถานะ</option>' + Object.entries(V_STATUS).map(([k, x]) => '<option value="' + k + '"' + (e.status === k ? ' selected' : '') + '>' + x[0] + '</option>').join('') + '</select>' +
+        '<button type="button" class="btn ghost sm" data-a="vprint"' + (ready.length ? '' : ' disabled') + '>พิมพ์ใบที่ยังไม่ใช้ (' + ready.length + ')</button></div>' +
+      (list.length ? '<div class="wrap" style="max-height:50vh;overflow:auto"><table class="tbl"><thead><tr><th>รหัส</th><th>ชุด</th><th>สถานะ</th><th>หมดอายุ</th><th>ใช้ที่</th><th></th></tr></thead><tbody>' +
+        list.map((x) => '<tr><td class="num"><b>' + esc(x.code) + '</b></td><td><small>' + esc(x.batch || '-') + '</small></td><td><span class="' + V_STATUS[x.status][1] + '">' + V_STATUS[x.status][0] + '</span></td><td><small>' + date(x.expires_at) + '</small></td>' +
+          '<td><small>' + (x.status === 'used' ? esc(x.used_branch_id || '') + ' · บิล ' + esc(x.pos_bill_id || '-') + ' · ' + fmt(x.used_amount) + ' บาท' : '') + '</small></td>' +
+          '<td class="r">' + (x.status === 'ready' ? '<button class="btn danger sm" data-a="vvoid" data-v="' + x.id + '">ยกเลิก</button>' : '') + '</td></tr>').join('') + '</tbody></table></div>' : '<p class="muted">ยังไม่มี Voucher กระดาษ</p>') +
+      (members.length ? '<p class="muted" style="margin-top:8px">มอบให้สมาชิกในบัตร LINE แล้ว ' + fmt(members.length) + ' ใบ (ใช้แล้ว ' + fmt(members.filter((x) => x.status === 'used').length) + ')</p>' : '') +
+      '<div class="actions"><button type="button" class="btn ghost" data-a="close">ปิด</button></div>';
+  }
+  async function openVouchers(id, keep) {
+    const data = await api('GET', '/api/admin/coupon-templates/' + id + '/vouchers');
+    S.edit = { kind: 'vouchers', id, data, batch: keep ? S.edit.batch : '', status: keep ? S.edit.status : '' }; render();
+  }
+  // หน้าพิมพ์: ใบละช่อง มีชื่อร้าน มูลค่า QR รหัส และวันหมดอายุ
+  function printVouchers(e) {
+    const list = vFiltered(e).filter((x) => x.status === 'ready'); const t = e.data.template;
+    const qr = (txt) => { if (!window.qrcode) return ''; const q = window.qrcode(0, 'M'); q.addData(txt); q.make(); return q.createSvgTag({ cellSize: 3, margin: 0, scalable: true }); };
+    const w = window.open('', '_blank'); if (!w) return toast('เบราว์เซอร์บล็อกหน้าต่างใหม่ อนุญาต pop-up แล้วลองอีกครั้ง');
+    w.document.write('<!doctype html><html lang="th"><head><meta charset="utf-8"><title>Voucher ' + esc(t.title) + '</title><style>' +
+      'body{font-family:"IBM Plex Sans Thai",sans-serif;margin:0;padding:8mm}.g{display:grid;grid-template-columns:repeat(2,1fr);gap:4mm}' +
+      '.v{border:1px dashed #555;border-radius:3mm;padding:4mm;display:flex;gap:4mm;align-items:center;break-inside:avoid}.q{width:28mm;height:28mm;flex:none}.q svg{width:100%;height:100%}' +
+      '.b{font-size:11pt;color:#555}.val{font-size:22pt;font-weight:700}.c{font-family:monospace;font-size:12pt;font-weight:700;letter-spacing:1px}.s{font-size:9pt;color:#555}' +
+      '@media print{body{padding:5mm}}</style></head><body><div class="g">' +
+      list.map((x) => '<div class="v"><div class="q">' + qr(x.code) + '</div><div><div class="b">' + esc(brand().name) + ' · ' + esc(t.title) + '</div><div class="val">฿' + fmt(t.value) + '</div>' +
+        '<div class="c">' + esc(x.code) + '</div><div class="s">ใช้แทนเงินตอนชำระ ยอดเกินไม่ทอน · ใช้ได้ 1 ครั้ง · หมดอายุ ' + date(x.expires_at) + '</div></div></div>').join('') +
+      '</div><script>window.onload=function(){setTimeout(function(){window.print()},300)}<\/script></body></html>');
+    w.document.close();
+  }
+
   function dialog() {
     const e = S.edit; let title = ''; let body = '';
     if (e.kind === 'reward') { const r = e.id === 'new' ? null : S.data.rewards.find((x) => String(x.id) === String(e.id)); title = r ? 'แก้ไขของรางวัล' : 'เพิ่มของรางวัล · ' + brand().name; body = rewardForm(r); }
@@ -869,7 +910,8 @@
     if (e.kind === 'staffpw') { title = 'ตั้งรหัสผ่านใหม่ให้ ' + e.id; body = staffPwForm(e.id); }
     if (e.kind === 'newMember') { title = 'เพิ่มสมาชิก · ' + brand().name; body = addMemberForm(); }
     if (e.kind === 'tags') { title = 'จัดการแท็กสมาชิก · ' + brand().name; body = tagManager(); }
-    return '<div class="scrim" data-a="close"></div><div class="dialog' + (e.kind === 'coupon' || e.kind === 'reward' || e.kind === 'tags' ? ' wide' : '') + '" role="dialog" aria-modal="true" aria-label="' + esc(title) + '"><h2>' + esc(title) + '</h2>' + body + '</div>';
+    if (e.kind === 'vouchers') { title = 'Voucher กระดาษ · ' + e.data.template.title; body = voucherPanel(e); }
+    return '<div class="scrim" data-a="close"></div><div class="dialog' + (e.kind === 'coupon' || e.kind === 'reward' || e.kind === 'tags' || e.kind === 'vouchers' ? ' wide' : '') + '" role="dialog" aria-modal="true" aria-label="' + esc(title) + '"><h2>' + esc(title) + '</h2>' + body + '</div>';
   }
 
   /* ---------- การกด ---------- */
@@ -950,6 +992,13 @@
       await api('DELETE', '/api/admin/staff/' + encodeURIComponent(v)); toast('ลบผู้ใช้แล้ว'); await load();
     },
     cfilter: (v) => { S.cfilter = v; render(); },
+    vouchers: (v) => openVouchers(v),
+    vprint: () => printVouchers(S.edit),
+    vvoid: async (v) => {
+      const x = S.edit.data.vouchers.find((y) => y.id === v);
+      if (!confirm('ยกเลิก Voucher ' + x.code + '?\nใช้ไม่ได้อีก (เช่น ใบหาย) ย้อนกลับไม่ได้')) return;
+      await api('POST', '/api/admin/vouchers/' + v + '/void', {}); toast('ยกเลิกแล้ว'); await openVouchers(S.edit.id, true);
+    },
     editCoupon: async (v) => {
       const t = v ? S.data.coupons.find((x) => String(x.id) === String(v)) : null;
       const [rounds, menu] = await Promise.all([t && t.kind === 'gift' ? api('GET', '/api/admin/coupon-templates/' + t.id + '/rounds') : [], api('GET', '/api/admin/pos-menu?brand=' + S.brand)]);
@@ -1030,6 +1079,10 @@
         !confirm('คูปองนี้อยู่ในกระเป๋าลูกค้า ' + fmt(S.edit.issued) + ' ใบที่ยังไม่ได้ใช้\nส่วนลดและเงื่อนไขใหม่จะมีผลกับทุกใบทันที (วันหมดอายุเดิม)\n\nบันทึกการเปลี่ยนแปลงไหม?')) return;
       if (id) await api('PATCH', '/api/admin/coupon-templates/' + id, body); else await api('POST', '/api/admin/coupon-templates', body);
       S.edit = null; toast(id ? 'บันทึกคูปองแล้ว' : 'สร้างคูปองแล้ว'); await load();
+    },
+    vissue: async (o, id) => {
+      const r = await api('POST', '/api/admin/coupon-templates/' + id + '/vouchers', { count: Number(o.count) });
+      toast('ออก Voucher ' + r.count + ' ใบแล้ว'); await load(); await openVouchers(id); S.edit.batch = r.batch.replace(/^batch:/, ''); S.edit.status = 'ready'; render();
     },
     gift: async (o, id) => {
       if (!o.templateId) throw new Error('เลือกคูปองที่จะมอบ');
@@ -1126,6 +1179,7 @@
     const f = e.target.closest && e.target.closest('form[data-f="coupon"]'); if (f) syncCoupon(f);
   });
   document.addEventListener('change', (e) => {
+    if (e.target.dataset && e.target.dataset.vf && S.edit && S.edit.kind === 'vouchers') { S.edit[e.target.dataset.vf] = e.target.value; render(); return; }
     const ms = e.target.closest && e.target.closest('form[data-f="msearch"]');
     if (ms && e.target.tagName === 'SELECT') ms.requestSubmit();
     const tf = e.target.closest && e.target.closest('form[data-f="tag"]'); if (tf) syncTagForm(tf);

@@ -61,7 +61,7 @@ async function setScopes(db, id, f) {
   for (const sid of f.scopeIds) await db.q('INSERT INTO staff_scopes (staff_id, scope_type, scope_id, approve_limit) VALUES ($1,$2,$3,$4)', [id, f.scope, sid, f.limit]);
 }
 
-const KIND_NAMES = { general: 'ทั่วไป', code: 'กรอกโค้ด', birthday: 'วันเกิด', welcome: 'ต้อนรับ', gift: 'ของขวัญ' };
+const KIND_NAMES = { general: 'ทั่วไป', code: 'กรอกโค้ด', birthday: 'วันเกิด', welcome: 'ต้อนรับ', gift: 'ของขวัญ', voucher: 'Voucher' };
 const DAY_SHORT = ['อา', 'จ', 'อ', 'พ', 'พฤ', 'ศ', 'ส'];
 const dayStart = (d) => (d ? endOfDay(d, '00:00:00') : null);
 function templateFields(b) {
@@ -69,12 +69,15 @@ function templateFields(b) {
   if (!kind) throw bad('kind_invalid', 'เลือกประเภทคูปอง');
   const title = String(b.title || '').trim();
   if (!title) throw bad('title_required', 'ใส่ชื่อคูปอง');
-  const style = ['baht', 'pct', 'free'].includes(b.type) ? b.type : 'baht';
-  const items = itemRules(style, b);
+  // Voucher = ใช้แทนเงินตอนชำระ มูลค่าเป็นบาท ไม่มีขั้นต่ำ/ของฟรี/เงื่อนไขสินค้า
+  const voucher = kind === 'voucher';
+  const style = voucher ? 'baht' : ['baht', 'pct', 'free'].includes(b.type) ? b.type : 'baht';
+  const items = itemRules(style, voucher ? {} : b);
   // มูลค่าเต็มของของฟรี (ใช้แสดงผล) · ส่วนลดจริงคิดจากราคาในบิลตอนชำระ
   const value = items.free ? (items.freeMode === 'all' ? items.free.reduce((a, x) => a + x.price, 0) : Math.max(...items.free.map((x) => x.price)) * items.freeQty) || 1 : Number(b.value);
   if (!(value > 0) || (style === 'pct' && value > 100)) throw bad('value_invalid', style === 'free' ? 'ใส่ราคาของที่แจกฟรี (ใช้เป็นส่วนลดตอนปิดบิล)' : 'ใส่มูลค่าส่วนลดให้ถูกต้อง');
-  const min = Math.max(0, Number(b.min) || 0);
+  if (voucher && !(value > 0 && value <= 100000)) throw bad('value_invalid', 'ใส่มูลค่า Voucher (บาท)');
+  const min = voucher ? 0 : Math.max(0, Number(b.min) || 0);
   const maxDiscount = style === 'pct' && Number(b.maxDiscount) > 0 ? Number(b.maxDiscount) : null;
   const validity = b.validity === 'dates' ? 'dates' : 'days';
   const validFrom = validity === 'dates' ? dayStart(b.validFrom) : null;
@@ -97,9 +100,9 @@ function templateFields(b) {
   const branchIds = kind === 'welcome' && Array.isArray(b.branchIds) ? [...new Set(b.branchIds.map(String))] : null;
   if (branchIds && !branchIds.length) throw bad('branch_required', 'เลือกสาขาอย่างน้อย 1 สาขา หรือเลือก "ทุกสาขา"');
   // ป้ายบนคูปอง + เงื่อนไขย่อ (สร้างจากการตั้งค่า ลูกค้าเห็นตรงกับที่ระบบตรวจจริง)
-  const big = style === 'free' ? 'ฟรี' : style === 'pct' ? '-' + value + '%' : '-' + value;
-  const small = style === 'free' ? KIND_NAMES[kind] : style === 'pct' ? 'ส่วนลด' : 'บาท';
-  const cond = [items.free ? 'ฟรี ' + (items.freeMode === 'all' ? items.free.map((x) => x.name).join(' + ') + ' อย่างละ 1 ชิ้น' + (items.freeNeedAll ? ' (ต้องมีครบทุกอย่างในบิล)' : ' (เฉพาะที่มีในบิล)')
+  const big = voucher ? '฿' + value : style === 'free' ? 'ฟรี' : style === 'pct' ? '-' + value + '%' : '-' + value;
+  const small = voucher ? 'Voucher' : style === 'free' ? KIND_NAMES[kind] : style === 'pct' ? 'ส่วนลด' : 'บาท';
+  const cond = voucher ? ['ใช้แทนเงินตอนชำระ มูลค่า ' + value + ' บาท', 'ยอดเกินไม่ทอน', useDays === 127 ? '' : 'ใช้ได้วัน ' + DAY_SHORT.filter((_, i) => useDays & (1 << i)).join(' '), '1 ใบใช้ได้ 1 ครั้ง'].filter(Boolean).join(' · ') : [items.free ? 'ฟรี ' + (items.freeMode === 'all' ? items.free.map((x) => x.name).join(' + ') + ' อย่างละ 1 ชิ้น' + (items.freeNeedAll ? ' (ต้องมีครบทุกอย่างในบิล)' : ' (เฉพาะที่มีในบิล)')
     : items.free.map((x) => x.name).join(' / ') + (items.freeMode === 'qty' ? ' รวม ' + items.freeQty + ' ชิ้น' : ' 1 ชิ้น') + ' (ต้องมีในบิล)') : '',
     items.condMode ? 'ต้องมี ' + items.condItems.map((x) => (x.type === 'cat' ? 'หมวด' : '') + x.name).join(items.condMode === 'all' ? ' และ ' : ' หรือ ') + (items.condQty > 1 ? ' รวม ' + items.condQty + ' ชิ้นขึ้นไป' : '') + ' ในบิล' : '',
     min ? 'ขั้นต่ำ ' + min + ' บาท' : '', maxDiscount ? 'ลดสูงสุด ' + maxDiscount + ' บาท' : '',
@@ -214,7 +217,7 @@ const TIERS = TIER_KEYS;
 const PERIODS = ['day', 'week', 'month', 'year', 'all'];
 // ของรางวัลแบบคูปอง: ต้องเป็นคูปองของแบรนด์เดียวกันที่สร้างในเมนูคูปอง (ไม่ใช่คูปองภายในของรางวัลอื่น)
 async function couponForReward(db, brandId, templateId) {
-  const t = await db.one("SELECT id FROM coupon_templates WHERE id = $1 AND brand_id = $2 AND kind <> 'internal' AND is_active", [templateId, brandId]);
+  const t = await db.one("SELECT id FROM coupon_templates WHERE id = $1 AND brand_id = $2 AND kind NOT IN ('internal','voucher') AND is_active", [templateId, brandId]);
   if (!t) throw bad('coupon_invalid', 'คูปองที่เลือกไม่มีแล้วหรือถูกปิดอยู่');
   return t.id;
 }
@@ -641,7 +644,8 @@ export default function (r) {
   // จัดการคูปอง (ทุกประเภทที่ไม่ใช่แม่แบบภายในของรางวัล/แคมเปญ)
   const TPL_SQL = `SELECT t.*, to_char(t.sched_date, 'YYYY-MM-DD') AS sched_date, to_char(t.sched_time, 'HH24:MI') AS sched_time, p.code,
       (SELECT row_to_json(r) FROM (SELECT round_key, run_at, eligible, members, issued FROM coupon_rounds r WHERE r.template_id = t.id ORDER BY run_at DESC LIMIT 1) r) AS last_round, (SELECT count(*) FROM member_coupons c WHERE c.template_id = t.id)::int AS issued,
-      (SELECT count(*) FROM member_coupons c WHERE c.template_id = t.id AND c.status = 'used')::int AS used
+      (SELECT count(*) FROM member_coupons c WHERE c.template_id = t.id AND c.status = 'used')::int AS used,
+      (SELECT count(*) FROM member_coupons c WHERE c.template_id = t.id AND c.member_id IS NULL)::int AS paper
     FROM coupon_templates t LEFT JOIN promo_codes p ON p.coupon_template_id = t.id`;
   r.get('/api/admin/coupon-templates', async (req, _b, url) => {
     const s = await staffUser(req); requirePage(s, 'rewards');
@@ -704,6 +708,7 @@ export default function (r) {
     const f = onlyToggle ? null : templateFields(b);
     // แจกไปแล้วก็แก้ได้: ส่วนลด/เงื่อนไขมีผลกับคูปองที่ลูกค้าถืออยู่และยังไม่ได้ใช้ทันที (วันหมดอายุของใบที่แจกแล้วไม่เปลี่ยน)
     // หน้าเว็บถามยืนยันก่อน · บันทึกค่าเดิม/ค่าใหม่ไว้ในประวัติการแก้ไข
+    if (f && old.issued && (f.kind === 'voucher') !== (old.kind === 'voucher')) throw bad('kind_locked', 'แจกไปแล้ว เปลี่ยนระหว่าง Voucher กับคูปองส่วนลดไม่ได้ ให้สร้างใหม่แทน');
     if (f && f.maxIssue && f.maxIssue < old.issued) throw bad('max_issue_low', 'จำนวนจำกัดต้องไม่น้อยกว่าที่แจกไปแล้ว (' + old.issued + ' ใบ)');
     return tx(async (db) => {
       let t;
@@ -722,6 +727,43 @@ export default function (r) {
       if (old.code && onlyToggle) await db.q('UPDATE promo_codes SET expires_at = $2 WHERE code = $1', [old.code, t.is_active ? t.issue_to : new Date()]);
       await core.audit(db, actor(s), 'update_coupon', { type: 'coupon', id: String(t.id) }, t.title + (t.is_active ? '' : ' · ปิดใช้งาน'), old, t);
       return t;
+    });
+  });
+  // Voucher กระดาษ: ออกเป็นชุด (ไม่ผูกสมาชิก) · ดูรายการ/สถานะเพื่อพิมพ์และตรวจการใช้
+  const voucherTpl = async (s, id) => {
+    const t = await one("SELECT * FROM coupon_templates WHERE id = $1 AND kind = 'voucher'", [parseInt(id, 10)]);
+    if (!t) throw notFound('ไม่พบ Voucher');
+    if (t.brand_id) requireBrand(s, t.brand_id); else if (s.role !== 'super') throw new HttpError(403, 'forbidden', 'Voucher นี้ใช้ได้ทุกแบรนด์ จัดการได้เฉพาะผู้ดูแลระบบ');
+    return t;
+  };
+  r.post('/api/admin/coupon-templates/:id/vouchers', async (req, b, _u, p) => {
+    const s = await staffUser(req); requirePage(s, 'rewards');
+    const t = await voucherTpl(s, p.id);
+    const res = await tx((db) => core.issuePaperVouchers(db, { templateId: t.id, count: b.count, by: s }));
+    return { batch: res.batch, count: res.vouchers.length, vouchers: res.vouchers.map((v) => ({ id: String(v.id), code: v.code, expiresAt: v.expires_at })) };
+  }, (b, out) => 'ออก Voucher ' + (out?.count ?? 0) + ' ใบ');
+  r.get('/api/admin/coupon-templates/:id/vouchers', async (req, _b, url, p) => {
+    const s = await staffUser(req); requirePage(s, 'rewards');
+    const t = await voucherTpl(s, p.id);
+    const st = url.searchParams.get('status');
+    const rows = await q(`SELECT c.id::text, c.code, c.member_id, m.full_name AS member_name, c.source, split_part(c.source_ref, ':', 2) AS batch, c.issued_at,
+        CASE WHEN c.status = 'ready' AND c.expires_at < now() THEN 'expired' ELSE c.status END AS status, c.expires_at, c.used_at, c.used_branch_id, c.used_amount::float AS used_amount, x.pos_bill_id
+      FROM member_coupons c LEFT JOIN members m ON m.id = c.member_id LEFT JOIN sales_transactions x ON x.id = c.used_txn_id
+      WHERE c.template_id = $1 AND ($2::text IS NULL OR (CASE WHEN c.status = 'ready' AND c.expires_at < now() THEN 'expired' ELSE c.status END) = $2)
+      ORDER BY c.id DESC LIMIT 2000`, [t.id, st || null]);
+    return { template: { id: t.id, title: t.title, value: Number(t.discount_value), brand: t.brand_id }, vouchers: rows };
+  });
+  // ยกเลิก Voucher ที่ยังไม่ใช้ (เช่น ใบหาย) → ใช้ไม่ได้อีก
+  r.post('/api/admin/vouchers/:id/void', async (req, _b, _u, p) => {
+    const s = await staffUser(req); requirePage(s, 'rewards');
+    const c = await one("SELECT c.*, t.kind FROM member_coupons c JOIN coupon_templates t ON t.id = c.template_id WHERE c.id = $1", [parseInt(p.id, 10)]);
+    if (!c || c.kind !== 'voucher') throw notFound('ไม่พบ Voucher');
+    await voucherTpl(s, c.template_id);
+    if (c.status !== 'ready') throw conflict('voucher_not_ready', 'Voucher นี้ใช้ไปแล้วหรือยกเลิกแล้ว');
+    return tx(async (db) => {
+      await db.q("UPDATE member_coupons SET status = 'void', voided_at = now(), reserved_ref = NULL, reserved_until = NULL WHERE id = $1", [c.id]);
+      await core.audit(db, actor(s), 'void_voucher', { type: 'coupon', id: String(c.template_id) }, 'ยกเลิก Voucher ' + c.code);
+      return { voided: String(c.id) };
     });
   });
   // อัปโหลดรูปคูปอง: รับ data URL (หน้าเว็บย่อรูปให้ก่อนส่ง) ตรวจชนิดไฟล์จากเนื้อไฟล์จริง

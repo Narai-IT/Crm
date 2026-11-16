@@ -1013,3 +1013,76 @@ t('ยกเลิกการแลกแต้ม: คืนแต้มเข
   const gid = (await call('POST', '/api/admin/members/' + mem + '/coupons', { templateId: gift.id }, adm)).data.couponId;
   assert.equal((await call('POST', '/api/pos/coupons/cancel-redeem', { memberId: mem, couponId: gid }, posHL01)).status, 400);
 });
+
+t('Voucher: กระดาษ (พิมพ์/ยิงรหัส ไม่ผูกสมาชิก) · ในบัตร LINE (สแกน QR เท่านั้น) · จองกับบิล · ตัดตอนบันทึกบิล · ไม่ใช่ส่วนลด', async () => {
+  const adm = { 'x-dev-staff': 'S002' };
+  const v = await call('POST', '/api/admin/coupon-templates', { brand: 'humlai', kind: 'voucher', title: 'Voucher 100 บาท', value: 100, validity: 'days', days: 30, useDays: 127, maxIssue: 5 }, adm);
+  assert.equal(v.status, 200, JSON.stringify(v.data));
+  assert.equal(v.data.badge_big, '฿100');
+  // ออกเป็นชุด · จำกัดจำนวน
+  assert.equal((await call('POST', '/api/admin/coupon-templates/' + v.data.id + '/vouchers', { count: 6 }, adm)).status, 409);
+  const batch = await call('POST', '/api/admin/coupon-templates/' + v.data.id + '/vouchers', { count: 3 }, adm);
+  assert.equal(batch.status, 200, JSON.stringify(batch.data));
+  assert.equal(batch.data.count, 3);
+  const [p1, p2, p3] = batch.data.vouchers;
+  assert.match(p1.code, /^VC-[A-Z0-9]{4}-[A-Z0-9]{4}$/);
+  // ตรวจ + จอง: พิมพ์ตัวเล็ก/ไม่มีขีดก็ได้ · บิลอื่นใช้ใบเดียวกันไม่ได้ระหว่างจอง
+  const chk = (code, ref) => call('POST', '/api/pos/vouchers/check', { code, ref }, posHL01);
+  const c1 = await chk(p1.code.replace(/-/g, '').toLowerCase(), 'vbill-1');
+  assert.equal(c1.status, 200, JSON.stringify(c1.data));
+  assert.equal(c1.data.voucher.value, 100); assert.equal(c1.data.voucher.memberId, null);
+  assert.equal((await chk(p1.code, 'vbill-2')).data.error, 'voucher_reserved');
+  assert.equal((await chk('VC-0000-0000', 'vbill-1')).status, 404);
+  // ยกเลิกใบหาย → ใช้ไม่ได้
+  assert.equal((await call('POST', '/api/admin/vouchers/' + p3.id + '/void', {}, adm)).status, 200);
+  assert.equal((await chk(p3.code, 'vbill-1')).data.error, 'voucher_unusable');
+  // ปล่อยแล้วบิลอื่นใช้ได้
+  await call('POST', '/api/pos/vouchers/release', { voucherId: c1.data.voucher.id, ref: 'vbill-1' }, posHL01);
+  assert.equal((await chk(p1.code, 'vbill-2')).status, 200);
+  assert.equal((await chk(p2.code, 'vbill-2')).status, 200);
+  // บันทึกบิล 150 บาท จ่าย Voucher 2 ใบ (200) · เกินไม่ทอน · ไม่ใช่ส่วนลด (แต้ม/ยอดไม่ลด) · บิลไม่ใช่สมาชิกก็ใช้ได้
+  const bill = await call('POST', '/api/pos/transactions', { posBillId: 'VBILL-1', items: [{ name: 'ข้าวมันไก่', price: 150, qty: 1 }], paidTotal: 150,
+    vouchers: [{ id: p1.id, amount: 100 }, { id: p2.id, amount: 50 }], voucherRef: 'vbill-2' }, posHL01);
+  assert.equal(bill.status, 200, JSON.stringify(bill.data));
+  assert.deepEqual(bill.data.vouchers.sort(), [p1.id, p2.id].sort());
+  assert.equal(Number(bill.data.discount), 0);
+  const tx = await mods.db.one("SELECT voucher_total FROM sales_transactions WHERE pos_bill_id = 'VBILL-1'");
+  assert.equal(Number(tx.voucher_total), 150);
+  assert.equal((await chk(p1.code, 'vbill-3')).data.error, 'voucher_used');
+  const list = (await call('GET', '/api/admin/coupon-templates/' + v.data.id + '/vouchers', undefined, adm)).data.vouchers;
+  const u1 = list.find((x) => x.id === p1.id);
+  assert.equal(u1.status, 'used'); assert.equal(u1.pos_bill_id, 'VBILL-1'); assert.equal(u1.used_amount, 100);
+  assert.equal(list.find((x) => x.id === p3.id).status, 'void');
+  // คืนเงินทั้งบิล → Voucher กลับมาใช้ได้
+  await call('POST', '/api/pos/refunds', { posBillId: 'VBILL-1' }, posHL01);
+  assert.equal((await chk(p1.code, 'vbill-4')).status, 200);
+  await call('POST', '/api/pos/vouchers/release', { voucherId: p1.id, ref: 'vbill-4' }, posHL01);
+
+  // Voucher ในบัตรสมาชิก: พิมพ์รหัสไม่ได้ ต้องสแกน QR จากบัตร (ใช้ได้ครั้งเดียว) · ช่องสมาชิกใช้เป็นคูปองส่วนลดไม่ได้
+  const u = { 'x-dev-line-user': 'Uvoucher0000000000000000000000001' };
+  await call('POST', '/api/dev/line-event', { brand: 'humlai', type: 'follow', lineUserId: 'Uvoucher0000000000000000000000001' });
+  await mods.db.q("UPDATE brands SET require_follow = false WHERE id = 'humlai'");
+  const rg = await call('POST', '/api/liff/register', { brand: 'humlai', name: 'สมาชิก Voucher', phone: '0861239876', privacy: true }, u);
+  assert.equal(rg.status, 200, JSON.stringify(rg.data));
+  const mid = (await call('GET', '/api/liff/me', undefined, u)).data.member.id;
+  const g = await call('POST', '/api/admin/members/' + mid + '/coupons', { templateId: v.data.id }, adm);
+  assert.equal(g.status, 200, JSON.stringify(g.data));
+  const mine = (await call('GET', '/api/liff/coupons?brand=humlai', undefined, u)).data.find((x) => x.id === g.data.couponId);
+  assert.equal(mine.kind, 'voucher');
+  assert.equal((await chk(g.data.code, 'vbill-5')).data.error, 'voucher_scan_required');
+  const qr = async () => (await call('GET', '/api/liff/coupons/' + g.data.couponId + '/qr', undefined, u)).data.token;
+  assert.equal((await call('POST', '/api/pos/members/resolve', { query: await qr() }, posHL01)).data.error, 'is_voucher');
+  const w = await call('POST', '/api/pos/members/wallet', { memberId: mid, subtotal: 300 }, posHL01);
+  assert.ok(!w.data.coupons.some((x) => x.id === g.data.couponId));
+  const tok = await qr();
+  const c5 = await chk(tok, 'vbill-5');
+  assert.equal(c5.status, 200, JSON.stringify(c5.data));
+  assert.equal(c5.data.voucher.memberId, mid); assert.equal(c5.data.voucher.memberName, 'สมาชิก Voucher');
+  assert.equal((await chk(tok, 'vbill-5')).status, 409);           // QR เดิมสแกนซ้ำไม่ได้
+  // ใช้เป็นคูปองส่วนลดในบิลไม่ได้
+  assert.equal((await call('POST', '/api/pos/transactions', { posBillId: 'VBILL-X', memberId: mid, items: [{ name: 'ข้าว', price: 300, qty: 1 }], couponIds: [g.data.couponId] }, posHL01)).data.error, 'is_voucher');
+  const b2 = await call('POST', '/api/pos/transactions', { posBillId: 'VBILL-2', items: [{ name: 'ข้าว', price: 300, qty: 1 }], paidTotal: 300, vouchers: [{ id: g.data.couponId, amount: 100 }], voucherRef: 'vbill-5' }, posHL01);
+  assert.deepEqual(b2.data.vouchers, [g.data.couponId]);
+  // หลังบ้านเปลี่ยนประเภทหลังแจกแล้วไม่ได้
+  assert.equal((await call('PATCH', '/api/admin/coupon-templates/' + v.data.id, { brand: 'humlai', kind: 'general', title: 'x', type: 'baht', value: 10, useDays: 127 }, adm)).data.error, 'kind_locked');
+});

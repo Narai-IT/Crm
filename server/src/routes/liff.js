@@ -18,12 +18,12 @@ async function needMember(req) {
 }
 
 export function couponView(c) {
-  return { id: String(c.id), code: c.code, brand: c.brand_id || 'all', title: c.title, big: c.badge_big, small: c.badge_small, cond: c.condition_text,
+  return { id: String(c.id), code: c.code, brand: c.brand_id || 'all', kind: c.kind === 'voucher' ? 'voucher' : 'coupon', title: c.title, big: c.badge_big, small: c.badge_small, cond: c.condition_text,
     desc: c.description || '', image: c.image_id ? '/api/public/coupon-images/' + c.image_id : null, validFrom: c.valid_from ? +new Date(c.valid_from) : null, useDays: c.use_days ?? 127,
     cp: { kind: c.discount_type, value: c.discount_value, min: c.min_spend, max: c.max_discount }, status: c.status === 'ready' && new Date(c.expires_at) < new Date() ? 'expired' : c.status,
     issuedAt: +new Date(c.issued_at), expiresAt: +new Date(c.expires_at), source: c.source, usedAt: c.used_at ? +new Date(c.used_at) : null, usedBranch: c.used_branch_id };
 }
-export const COUPON_SQL = 'SELECT c.*, t.title, t.badge_big, t.badge_small, t.condition_text, t.discount_type, t.discount_value, t.min_spend, t.max_discount, t.description, t.image_id, t.valid_from, t.use_days FROM member_coupons c JOIN coupon_templates t ON t.id = c.template_id';
+export const COUPON_SQL = 'SELECT c.*, t.kind, t.title, t.badge_big, t.badge_small, t.condition_text, t.discount_type, t.discount_value, t.min_spend, t.max_discount, t.description, t.image_id, t.valid_from, t.use_days FROM member_coupons c JOIN coupon_templates t ON t.id = c.template_id';
 
 // ต้องเพิ่มเพื่อน OA ก่อนสมัครไหม · ok = null คือตรวจไม่ได้ ปล่อยให้สมัครได้
 async function friendGate(brandId, lineUserId) {
