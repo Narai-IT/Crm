@@ -134,7 +134,10 @@ export default function (r) {
     const t = await posTerminal(req);
     const ok = await tx((db) => core.checkMemberCode(db, { memberId: id, code: body.code, brandId: t.brandId }));
     if (!ok) throw bad('code_invalid', 'รหัสไม่ถูกต้อง ดูรหัส 6 หลักล่าสุดในบัตรสมาชิกแล้วลองใหม่');
-    return { verifyToken: signToken({ vm: id }, 3600) };
+    // จำการล็อกอินในมือถือลูกค้าได้กี่วัน (หลังบ้าน POS > เมนูสมาชิก) · ไม่ส่งมา = 1 ชั่วโมงเหมือนเดิม · สูงสุด 90 วัน
+    const days = Math.min(90, Math.max(0, parseInt(body.days, 10) || 0));
+    const ttl = days ? days * 86400 : 3600;
+    return { verifyToken: signToken({ vm: id }, ttl), expiresIn: ttl };
   });
 
   r.post('/api/pos/refunds', async (req, body) => {
