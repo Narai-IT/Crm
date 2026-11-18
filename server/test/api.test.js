@@ -420,6 +420,10 @@ t('หน้าร้าน: ดูคูปอง/รางวัล · จอ�
   assert.match(code, /^\d{6}$/);
   assert.equal((await call('POST', '/api/pos/members/verify/check', { memberId: mid, code: code === '000000' ? '111111' : '000000' }, posHL01)).status, 400);
   const ok = await call('POST', '/api/pos/members/verify/check', { memberId: mid, code }, posHL01);
+  assert.equal(ok.data.expiresIn, 3600);
+  const lng = await call('POST', '/api/pos/members/verify/check', { memberId: mid, code, days: 30 }, posHL01);
+  assert.equal(lng.data.expiresIn, 30 * 86400);
+  assert.equal((await call('POST', '/api/pos/members/verify/check', { memberId: mid, code, days: 999 }, posHL01)).data.expiresIn, 90 * 86400);
   assert.ok(ok.data.verifyToken);
   assert.equal((await call('POST', '/api/pos/members/wallet', { memberId: mid, requireVerify: true, verifyToken: ok.data.verifyToken }, posHL01)).status, 200);
   assert.equal((await call('POST', '/api/pos/members/wallet', { memberId: 'MB-0000001', requireVerify: true, verifyToken: ok.data.verifyToken }, posHL01)).status, 401);
