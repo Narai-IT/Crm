@@ -140,3 +140,8 @@ h1, h2, h3 { font-family: var(--f-display); font-weight: 600; margin: 0; }
 .bday legend .muted { font-weight: 400; }
 .bday-row { display: grid; grid-template-columns: 1fr 1.8fr 1.3fr; gap: 8px; }
 .bday-row select { min-height: 46px; border: 1px solid #DCCBC0; border-radius: 10px; padding: 0 8px; background: #fff; font-size: 16px; min-width: 0; }
+.card.pdpa { font-size: 14px; line-height: 1.55; }
+.card.pdpa > b:first-child { font-size: 15px; }
+.pdpa details summary { cursor: pointer; color: var(--ai); font-weight: 600; min-height: 32px; display: flex; align-items: center; }
+.pdpa details ul { margin: 4px 0 0; padding-left: 18px; display: flex; flex-direction: column; gap: 6px; }
+.nowrap { white-space: nowrap; }

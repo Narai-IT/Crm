@@ -280,6 +280,22 @@
       '<select id="r-bm" data-m="reg.bm" aria-label="เดือน">' + opt('', 'เดือน', r.bm) + TH_MONTHS.map((n, i) => opt(i + 1, n, r.bm)).join('') + '</select>' +
       '<select id="r-by" data-m="reg.by" aria-label="ปี พ.ศ.">' + opt('', 'ปี พ.ศ.', r.by) + years.join('') + '</select></div></fieldset>';
   }
+  // แจ้งการใช้ข้อมูลส่วนบุคคล (PDPA) · เปลี่ยนข้อความเมื่อไร ให้เปลี่ยน PRIVACY_VERSION ด้วย (บันทึกกับสมาชิกตอนสมัคร)
+  const COMPANY = 'บริษัท นารายณ์ พิซเซอร์เรีย';
+  const PRIVACY_VERSION = '2026-11';
+  function privacyNotice() {
+    const names = S.brands.map((x) => x.name);
+    const list = names.length > 1 ? names.slice(0, -1).join(', ') + ' และ ' + names[names.length - 1] : names.join('');
+    return '<section class="card pdpa" aria-labelledby="pdpa-h"><b id="pdpa-h">การใช้ข้อมูลส่วนบุคคล</b>' +
+      '<span>ข้อมูลสมาชิกของคุณเก็บและใช้โดย <b class="nowrap">' + esc(COMPANY) + '</b> ร่วมกันในเครือร้านอาหารของบริษัท ได้แก่ ' + esc(list) +
+      ' เพื่อให้คุณใช้บัตรสมาชิก สะสมและแลกแต้ม และรับคูปองได้ทุกร้านในเครือ</span>' +
+      '<details><summary>อ่านรายละเอียด</summary><ul>' +
+      '<li><b>ข้อมูลที่เก็บ:</b> ชื่อ เบอร์โทรศัพท์ วันเกิด (ถ้าระบุ) สาขาที่สมัคร บัญชี LINE ประวัติการซื้อ แต้ม และคูปอง</li>' +
+      '<li><b>ใช้เพื่อ:</b> ยืนยันตัวตนสมาชิก คำนวณแต้ม ออกใบเสร็จและใบกำกับภาษี ส่งคูปองและแจ้งเตือนเกี่ยวกับบัญชีทาง LINE</li>' +
+      '<li><b>ข่าวสารและโปรโมชั่น:</b> ส่งให้เฉพาะเมื่อคุณเลือกรับด้านล่าง และยกเลิกได้ทุกเมื่อในหน้า "ข้อมูลของฉัน"</li>' +
+      '<li><b>สิทธิ์ของคุณ:</b> ขอดู แก้ไข ขอลบข้อมูล หรือถอนความยินยอมได้ โดยแจ้งพนักงานที่ร้านในเครือ หรือส่งข้อความหาเราทาง LINE นี้</li>' +
+      '<li>เราไม่ขายหรือส่งต่อข้อมูลของคุณให้บุคคลภายนอกเครือเพื่อการตลาด</li></ul></details></section>';
+  }
   function registerView() {
     const b = brand(); const r = S.reg;
     if (S.me.friend && S.me.friend.required) return friendView(b, S.me.friend);
@@ -293,7 +309,8 @@
         : '<div class="field"><label for="r-phone">เบอร์โทรศัพท์</label><input id="r-phone" data-m="reg.phone" inputmode="tel" maxlength="10" value="' + esc(r.phone) + '" autocomplete="tel"></div>') +
       birthdayField(r) +
       '<div class="field"><label for="r-br">สาขาที่สมัคร</label><select id="r-br" data-m="reg.branchId">' + b.branches.map((x) => '<option value="' + x.id + '"' + (r.branchId === x.id ? ' selected' : '') + '>' + esc(x.name) + '</option>').join('') + '</select></div>' +
-      '<label class="check"><input type="checkbox" data-m="reg.privacy"' + (r.privacy ? ' checked' : '') + '><span>ยอมรับเงื่อนไขสมาชิกและนโยบายความเป็นส่วนตัวของเครือ</span></label>' +
+      privacyNotice() +
+      '<label class="check"><input type="checkbox" data-m="reg.privacy"' + (r.privacy ? ' checked' : '') + '><span>ฉันยอมรับเงื่อนไขสมาชิก และรับทราบการใช้ข้อมูลส่วนบุคคลข้างต้นของ <span class="nowrap">' + esc(COMPANY) + '</span></span></label>' +
       '<label class="check"><input type="checkbox" data-m="reg.marketing"' + (r.marketing ? ' checked' : '') + '><span>ยินดีรับข่าวสารและโปรโมชั่นจาก ' + esc(b.name) + ' ทาง LINE</span></label>' +
       (r.err ? '<div class="err" role="alert">' + esc(r.err) + '</div>' : '') +
       '<button class="btn" data-a="register">สมัครสมาชิก</button>' +
@@ -375,7 +392,7 @@
       else if (!r.privacy) r.err = 'ต้องยอมรับเงื่อนไขสมาชิกและนโยบายความเป็นส่วนตัวก่อนสมัคร';
       if (r.err) return render();
       try {
-        const res = await api('POST', '/api/liff/register', { brand: S.brand, name: r.name.trim(), phone: r.phone, otp: S.cfg.requireOtp ? r.otp : undefined, birthday: birthdayISO(r).value, branchId: r.branchId, marketing: r.marketing, privacy: true });
+        const res = await api('POST', '/api/liff/register', { brand: S.brand, name: r.name.trim(), phone: r.phone, otp: S.cfg.requireOtp ? r.otp : undefined, birthday: birthdayISO(r).value, branchId: r.branchId, marketing: r.marketing, privacy: true, privacyVersion: PRIVACY_VERSION });
         toast(res.linked ? 'พบบัญชีเดิมของคุณ ผูกกับ LINE แล้ว' : (res.welcomePoints > 0 ? 'สมัครสำเร็จ รับ ' + fmt(res.welcomePoints) + ' แต้ม' : 'สมัครสำเร็จ'));
         if (S.fromKiosk) S.joined = r.phone;
         S.tab = 'home'; await refresh();
