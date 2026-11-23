@@ -5,7 +5,7 @@ import { pool, tx } from '../src/db.js';
 import { hashPassword, sha256, calcPoints } from '../src/util.js';
 
 const BRANDS = [
-  ['narai', 'Narai x ข้าน้อย', 'Narai', 'บุฟเฟต์', 'NR', '#1F5A85', '#E4EEF6', '#123A57', 'N', '@narai.demo'],
+  ['narai', 'ข้าน้อยขอชาบู', 'Narai', 'บุฟเฟต์', 'NR', '#1F5A85', '#E4EEF6', '#123A57', 'N', '@narai.demo'],
   ['wakame', 'Wakame', 'Wakame', 'ราเมน', 'WK', '#2F6B4F', '#E3F0E8', '#1C4432', 'W', '@wakame.demo'],
   ['humlai', 'ข้าวมันไก่หำไหล', 'หำไหล', 'ข้าวมันไก่', 'HL', '#C7481A', '#FDEBE1', '#8A3A16', 'ห', '@humlai.demo']
 ];
