@@ -10,7 +10,7 @@
     cfg: null, brands: [], brand: null, tab: params.get('tab') || 'home', auth: {}, inClient: false, dev: false,
     me: null, coupons: [], rewards: [], bills: [], ledger: [], qr: null, qrAt: 0,
     couponTab: 'ready', showCode: null, pick: null, rcat: 'all', hist: 'bills', openBill: null, code: '', busy: false,
-    reg: { name: '', phone: '', otp: '', otpSent: false, birthday: '', branchId: '', privacy: false, marketing: true, err: '' }
+    reg: { name: '', nameFromLine: false, phone: '', otp: '', otpSent: false, bd: '', bm: '', by: '', branchId: '', privacy: false, marketing: true, err: '' }
   };
 
   /* ---------- helpers ---------- */
@@ -101,7 +101,12 @@
     }
   }
 
-  async function loadMe() { S.me = await api('GET', '/api/liff/me?brand=' + S.brand); }
+  async function loadMe() {
+    S.me = await api('GET', '/api/liff/me?brand=' + S.brand);
+    // ยังไม่เป็นสมาชิก: เติมชื่อจากโปรไฟล์ LINE ไว้ให้ก่อน (ครั้งเดียว ลูกค้าลบ/แก้ได้)
+    const dn = S.me && !S.me.member && String(S.me.displayName || '').trim();
+    if (dn && !S.reg.name && !S.reg.nameFromLine) { S.reg.name = lineName(); S.reg.nameFromLine = true; }
+  }
   async function loadTab() {
     if (!S.me || !S.me.member) return;
     const b = S.brand;
@@ -254,20 +259,58 @@
       '<button class="btn ghost" data-a="checkFriend">เพิ่มเพื่อนแล้ว ไปกรอกข้อมูล</button></div>' +
       '<div class="steps"><span class="on">1 เพิ่มเพื่อน</span><span>2 กรอกข้อมูลสมัคร</span></div></main>';
   }
+  // วันเกิดแบบเลือก วัน / เดือน / ปี พ.ศ. (ไม่ใช้ input type=date เพราะแสดงตามภาษาเครื่อง เช่น mm/dd/yyyy)
+  const TH_MONTHS = ['มกราคม', 'กุมภาพันธ์', 'มีนาคม', 'เมษายน', 'พฤษภาคม', 'มิถุนายน', 'กรกฎาคม', 'สิงหาคม', 'กันยายน', 'ตุลาคม', 'พฤศจิกายน', 'ธันวาคม'];
+  const lineName = () => String((S.me && S.me.displayName) || '').trim().slice(0, 100);
+  function birthdayISO(r) {
+    if (!r.bd && !r.bm && !r.by) return { ok: true, value: null };
+    if (!r.bd || !r.bm || !r.by) return { ok: false, err: 'เลือกวันเกิดให้ครบทั้ง วัน เดือน และปี (หรือเว้นว่างทั้งหมด)' };
+    const y = Number(r.by) - 543; const m = Number(r.bm); const d = Number(r.bd);
+    const dt = new Date(Date.UTC(y, m - 1, d));
+    if (dt.getUTCMonth() !== m - 1) return { ok: false, err: 'ไม่มีวันที่ ' + d + ' ' + TH_MONTHS[m - 1] + ' ' + r.by };
+    return { ok: true, value: y + '-' + String(m).padStart(2, '0') + '-' + String(d).padStart(2, '0') };
+  }
+  function birthdayField(r) {
+    const opt = (v, label, cur) => '<option value="' + v + '"' + (String(cur) === String(v) ? ' selected' : '') + '>' + esc(label) + '</option>';
+    const thisBE = new Date().getFullYear() + 543;
+    const days = []; for (let d = 1; d <= 31; d++) days.push(opt(d, d, r.bd));
+    const years = []; for (let y = thisBE; y >= thisBE - 100; y--) years.push(opt(y, y, r.by));
+    return '<fieldset class="field bday"><legend>วันเกิด <span class="muted">(ไม่บังคับ · รับคูปองเดือนเกิด)</span></legend><div class="bday-row">' +
+      '<select id="r-bd" data-m="reg.bd" aria-label="วันที่">' + opt('', 'วัน', r.bd) + days.join('') + '</select>' +
+      '<select id="r-bm" data-m="reg.bm" aria-label="เดือน">' + opt('', 'เดือน', r.bm) + TH_MONTHS.map((n, i) => opt(i + 1, n, r.bm)).join('') + '</select>' +
+      '<select id="r-by" data-m="reg.by" aria-label="ปี พ.ศ.">' + opt('', 'ปี พ.ศ.', r.by) + years.join('') + '</select></div></fieldset>';
+  }
+  // แจ้งการใช้ข้อมูลส่วนบุคคล (PDPA) · เปลี่ยนข้อความเมื่อไร ให้เปลี่ยน PRIVACY_VERSION ด้วย (บันทึกกับสมาชิกตอนสมัคร)
+  const COMPANY = 'บริษัท นารายณ์ พิซเซอร์เรีย จำกัด';
+  const PRIVACY_VERSION = '2026-11';
+  function privacyNotice() {
+    const names = S.brands.map((x) => x.name);
+    const list = names.length > 1 ? names.slice(0, -1).join(', ') + ' และ ' + names[names.length - 1] : names.join('');
+    return '<section class="card pdpa" aria-labelledby="pdpa-h"><b id="pdpa-h">การใช้ข้อมูลส่วนบุคคล</b>' +
+      '<span>ข้อมูลสมาชิกของคุณเก็บและใช้โดย <b class="nowrap">' + esc(COMPANY) + '</b> ร่วมกันในเครือร้านอาหารของบริษัท ได้แก่ ' + esc(list) +
+      ' เพื่อให้คุณใช้บัตรสมาชิก สะสมและแลกแต้ม และรับคูปองได้ทุกร้านในเครือ</span>' +
+      '<details><summary>อ่านรายละเอียด</summary><ul>' +
+      '<li><b>ข้อมูลที่เก็บ:</b> ชื่อ เบอร์โทรศัพท์ วันเกิด (ถ้าระบุ) สาขาที่สมัคร บัญชี LINE ประวัติการซื้อ แต้ม และคูปอง</li>' +
+      '<li><b>ใช้เพื่อ:</b> ยืนยันตัวตนสมาชิก คำนวณแต้ม ออกใบเสร็จและใบกำกับภาษี ส่งคูปองและแจ้งเตือนเกี่ยวกับบัญชีทาง LINE</li>' +
+      '<li><b>ข่าวสารและโปรโมชั่น:</b> ส่งให้เฉพาะเมื่อคุณเลือกรับด้านล่าง และยกเลิกได้ทุกเมื่อในหน้า "ข้อมูลของฉัน"</li>' +
+      '<li><b>สิทธิ์ของคุณ:</b> ขอดู แก้ไข ขอลบข้อมูล หรือถอนความยินยอมได้ โดยแจ้งพนักงานที่ร้านในเครือ หรือส่งข้อความหาเราทาง LINE นี้</li>' +
+      '<li>เราไม่ขายหรือส่งต่อข้อมูลของคุณให้บุคคลภายนอกเครือเพื่อการตลาด</li></ul></details></section>';
+  }
   function registerView() {
     const b = brand(); const r = S.reg;
     if (S.me.friend && S.me.friend.required) return friendView(b, S.me.friend);
     if (!r.branchId && b.branches[0]) r.branchId = b.branches[0].id;
     return head('สมัครสมาชิก · ' + b.short_name) + '<main class="body" style="padding-bottom:24px">' +
       '<div class="hero"><b>' + (b.welcome_points > 0 ? 'สมัครวันนี้ รับ ' + fmt(b.welcome_points) + ' แต้มทันที' : 'สมัครสมาชิกฟรี สะสมแต้มทุกบิล') + '</b><span style="font-size:13px">+ คูปองส่วนลดสำหรับสมาชิกใหม่</span></div>' +
-      '<div class="field"><label for="r-name">ชื่อ - นามสกุล</label><input id="r-name" data-m="reg.name" value="' + esc(r.name) + '" autocomplete="name"></div>' +
+      '<div class="field"><label for="r-name">ชื่อ - นามสกุล</label><input id="r-name" data-m="reg.name" value="' + esc(r.name) + '" autocomplete="name">' + (r.nameFromLine ? '<small id="r-name-hint" class="muted"' + (r.name === lineName() ? '' : ' hidden') + '>ใช้ชื่อจาก LINE ให้ก่อน แก้เป็นชื่อจริงได้</small>' : '') + '</div>' +
       (S.cfg && S.cfg.requireOtp
         ? '<div class="row2"><div class="field"><label for="r-phone">เบอร์โทรศัพท์</label><input id="r-phone" data-m="reg.phone" inputmode="tel" maxlength="10" value="' + esc(r.phone) + '" autocomplete="tel"></div><button class="btn' + (r.otpSent ? ' ghost' : '') + '" data-a="otp">' + (r.otpSent ? 'ส่งอีกครั้ง' : 'ขอ OTP') + '</button></div>' +
           (r.otpSent ? '<span class="ok">ส่งรหัส OTP ทาง SMS แล้ว</span><div class="field"><label for="r-otp">รหัส OTP 6 หลัก</label><input id="r-otp" data-m="reg.otp" inputmode="numeric" maxlength="6" autocomplete="one-time-code" value="' + esc(r.otp) + '"></div>' : '<span class="muted" style="font-size:13px">เราจะส่งรหัสยืนยันทาง SMS · ถ้าเคยเป็นสมาชิกด้วยเบอร์นี้ ระบบจะใช้บัญชีเดิม</span>')
         : '<div class="field"><label for="r-phone">เบอร์โทรศัพท์</label><input id="r-phone" data-m="reg.phone" inputmode="tel" maxlength="10" value="' + esc(r.phone) + '" autocomplete="tel"></div>') +
-      '<div class="row2"><div class="field"><label for="r-bd">วันเกิด (รับคูปองเดือนเกิด)</label><input id="r-bd" type="date" data-m="reg.birthday" value="' + esc(r.birthday) + '"></div></div>' +
+      birthdayField(r) +
       '<div class="field"><label for="r-br">สาขาที่สมัคร</label><select id="r-br" data-m="reg.branchId">' + b.branches.map((x) => '<option value="' + x.id + '"' + (r.branchId === x.id ? ' selected' : '') + '>' + esc(x.name) + '</option>').join('') + '</select></div>' +
-      '<label class="check"><input type="checkbox" data-m="reg.privacy"' + (r.privacy ? ' checked' : '') + '><span>ยอมรับเงื่อนไขสมาชิกและนโยบายความเป็นส่วนตัวของเครือ</span></label>' +
+      privacyNotice() +
+      '<label class="check"><input type="checkbox" data-m="reg.privacy"' + (r.privacy ? ' checked' : '') + '><span>ฉันยอมรับเงื่อนไขสมาชิก และรับทราบการใช้ข้อมูลส่วนบุคคลข้างต้นของ <span class="nowrap">' + esc(COMPANY) + '</span></span></label>' +
       '<label class="check"><input type="checkbox" data-m="reg.marketing"' + (r.marketing ? ' checked' : '') + '><span>ยินดีรับข่าวสารและโปรโมชั่นจาก ' + esc(b.name) + ' ทาง LINE</span></label>' +
       (r.err ? '<div class="err" role="alert">' + esc(r.err) + '</div>' : '') +
       '<button class="btn" data-a="register">สมัครสมาชิก</button>' +
@@ -345,10 +388,11 @@
       if (!r.name.trim()) r.err = 'กรอกชื่อ - นามสกุล';
       else if (!/^0\d{8,9}$/.test(r.phone)) r.err = 'กรอกเบอร์โทร 10 หลักที่ขึ้นต้นด้วย 0';
       else if (S.cfg.requireOtp && (!r.otpSent || r.otp.length < 4)) r.err = 'กดขอ OTP แล้วกรอกรหัสที่ได้รับ';
+      else if (!birthdayISO(r).ok) r.err = birthdayISO(r).err;
       else if (!r.privacy) r.err = 'ต้องยอมรับเงื่อนไขสมาชิกและนโยบายความเป็นส่วนตัวก่อนสมัคร';
       if (r.err) return render();
       try {
-        const res = await api('POST', '/api/liff/register', { brand: S.brand, name: r.name.trim(), phone: r.phone, otp: S.cfg.requireOtp ? r.otp : undefined, birthday: r.birthday || null, branchId: r.branchId, marketing: r.marketing, privacy: true });
+        const res = await api('POST', '/api/liff/register', { brand: S.brand, name: r.name.trim(), phone: r.phone, otp: S.cfg.requireOtp ? r.otp : undefined, birthday: birthdayISO(r).value, branchId: r.branchId, marketing: r.marketing, privacy: true, privacyVersion: PRIVACY_VERSION });
         toast(res.linked ? 'พบบัญชีเดิมของคุณ ผูกกับ LINE แล้ว' : (res.welcomePoints > 0 ? 'สมัครสำเร็จ รับ ' + fmt(res.welcomePoints) + ' แต้ม' : 'สมัครสำเร็จ'));
         if (S.fromKiosk) S.joined = r.phone;
         S.tab = 'home'; await refresh();
@@ -402,9 +446,13 @@
     const k = e.target.dataset && e.target.dataset.m; if (!k) return;
     const val = e.target.type === 'checkbox' ? e.target.checked : e.target.value;
     if (k === 'code') S.code = val;
+    else if (k === 'reg.name') { S.reg.name = val; const h = document.getElementById('r-name-hint'); if (h) h.hidden = val !== lineName(); }
     else { const f = k.split('.')[1]; S.reg[f] = (f === 'phone' || f === 'otp') ? String(val).replace(/\D/g, '') : val; }
   });
-  document.addEventListener('change', (e) => { if (e.target.dataset && e.target.dataset.m && e.target.tagName === 'SELECT') S.reg.branchId = e.target.value; });
+  document.addEventListener('change', (e) => {
+    const k = e.target.dataset && e.target.dataset.m;
+    if (k && e.target.tagName === 'SELECT' && k.startsWith('reg.')) S.reg[k.split('.')[1]] = e.target.value;
+  });
 
   // นับถอยหลัง QR และขอ QR ใหม่เมื่อหมดเวลา
   setInterval(async () => {
