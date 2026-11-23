@@ -310,7 +310,8 @@ async function tagsOf(brand, ids) {
   const manual = await q('SELECT member_id, tag_id FROM member_tags WHERE member_id = ANY($1)', [ids]);
   for (const t of tags) {
     if (t.kind === 'manual') manual.filter((x) => x.tag_id === t.id).forEach((x) => add(x.member_id, t));
-    else (await q(`SELECT m.id FROM members m WHERE m.id = ANY($2) AND ${autoTagSql(t.rule)}`, [brand, ids])).forEach((x) => add(x.id, t));
+    // บางเงื่อนไข (no_line, new, birthday) ไม่ได้ใช้ $1 → ระบุชนิดให้ $1 ไว้ ไม่งั้น PostgreSQL หาชนิดพารามิเตอร์ไม่ได้ (42P18)
+    else (await q(`SELECT m.id FROM members m WHERE $1::text IS NOT NULL AND m.id = ANY($2) AND ${autoTagSql(t.rule)}`, [brand, ids])).forEach((x) => add(x.id, t));
   }
   return out;
 }
