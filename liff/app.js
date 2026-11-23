@@ -281,7 +281,7 @@
       '<select id="r-by" data-m="reg.by" aria-label="ปี พ.ศ.">' + opt('', 'ปี พ.ศ.', r.by) + years.join('') + '</select></div></fieldset>';
   }
   // แจ้งการใช้ข้อมูลส่วนบุคคล (PDPA) · เปลี่ยนข้อความเมื่อไร ให้เปลี่ยน PRIVACY_VERSION ด้วย (บันทึกกับสมาชิกตอนสมัคร)
-  const COMPANY = 'บริษัท นารายณ์ พิซเซอร์เรีย';
+  const COMPANY = 'บริษัท นารายณ์ พิซเซอร์เรีย จำกัด';
   const PRIVACY_VERSION = '2026-11';
   function privacyNotice() {
     const names = S.brands.map((x) => x.name);
