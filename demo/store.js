@@ -6,7 +6,7 @@
   const DAY = 86400000;
 
   const BRANDS = {
-    narai:  { id: 'narai',  name: 'ข้าน้อยขอชาบู', short: 'Narai',  kind: 'บุฟเฟต์', accent: '#1F5A85', soft: '#E4EEF6', ink: '#123A57', oa: '@narai.demo',  initial: 'N' },
+    narai:  { id: 'narai',  name: 'ข้าน้อยขอชาบู', short: 'ข้าน้อยขอชาบู',  kind: 'บุฟเฟต์', accent: '#1F5A85', soft: '#E4EEF6', ink: '#123A57', oa: '@narai.demo',  initial: 'N' },
     wakame: { id: 'wakame', name: 'Wakame',          short: 'Wakame', kind: 'ราเมน',   accent: '#2F6B4F', soft: '#E3F0E8', ink: '#1C4432', oa: '@wakame.demo', initial: 'W' },
     humlai: { id: 'humlai', name: 'ข้าวมันไก่หำไหล',  short: 'หำไหล',  kind: 'ข้าวมันไก่', accent: '#C7481A', soft: '#FDEBE1', ink: '#8A3A16', oa: '@humlai.demo', initial: 'ห' }
   };
