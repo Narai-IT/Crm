@@ -142,7 +142,7 @@ export default function (r) {
 
   r.post('/api/pos/refunds', async (req, body) => {
     const t = await posTerminal(req);
-    const res = await tx((db) => core.refundSale(db, { branchId: t.branchId, posBillId: String(body.posBillId), posRefundId: body.posRefundId, amount: body.amount ?? null, by: body.staffId || t.staffId || t.terminalId }));
+    const res = await tx((db) => core.refundSale(db, { branchId: t.branchId, posBillId: String(body.posBillId), posRefundId: body.posRefundId, amount: body.amount ?? null, by: body.staffId || t.staffId || t.terminalId, reason: body.reason }));
     return { duplicate: !!res.duplicate, pointsReversed: res.pointsReversed ?? res.refund.points_reversed, couponsReturned: res.couponsReturned ?? 0 };
   }, (b, out) => 'หักแต้มคืน ' + (out?.pointsReversed ?? 0) + ' · คืนคูปอง ' + (out?.couponsReturned ?? 0));
 

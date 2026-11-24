@@ -87,10 +87,20 @@ t('ใช้คูปองต้อนรับ 10% แล้วคืนเง
   assert.equal(sale.data.points, 10);                     // 270 / 25 = 10
   const reuse = await call('POST', '/api/pos/transactions', { posBillId: 'T-4', memberId: me.id, items: [{ id: 'h1', name: 'x', price: 100, qty: 1 }], couponIds: [welcome.id] }, posHL01);
   assert.equal(reuse.status, 409);
-  const ref = await call('POST', '/api/pos/refunds', { posBillId: 'T-3' }, posHL01);
+  const ref = await call('POST', '/api/pos/refunds', { posBillId: 'T-3', reason: 'ลูกค้ายกเลิก สั่งผิดโต๊ะ' }, posHL01);
   assert.equal(ref.data.pointsReversed, 10);
   assert.equal(ref.data.couponsReturned, 1);
   assert.equal((await call('GET', '/api/liff/me', undefined, asUser)).data.wallets.humlai.balance, 70);
+  // เก็บเหตุผลไว้กับการคืนเงิน และในประวัติแต้มของลูกค้า
+  assert.equal((await mods.db.one("SELECT r.reason FROM refunds r JOIN sales_transactions t ON t.id = r.txn_id WHERE t.pos_bill_id = 'T-3'")).reason, 'ลูกค้ายกเลิก สั่งผิดโต๊ะ');
+  assert.match((await mods.db.one("SELECT note FROM point_ledger WHERE entry_type = 'refund' ORDER BY id DESC LIMIT 1")).note, /T-3 · ลูกค้ายกเลิก/);
+  // บิล 0 บาท (ส่วนลดเต็มบิล) ยกเลิกทั้งบิลได้ · ระบุยอดคืน 0 เองไม่ได้
+  await call('POST', '/api/pos/transactions', { posBillId: 'T-ZERO', memberId: me.id, items: [{ id: 'h1', name: 'x', price: 100, qty: 1 }], storeDiscount: 100, paidTotal: 0 }, posHL01);
+  assert.equal((await mods.db.one("SELECT total FROM sales_transactions WHERE pos_bill_id = 'T-ZERO'")).total, 0);
+  const z = await call('POST', '/api/pos/refunds', { posBillId: 'T-ZERO', reason: 'ทดสอบ' }, posHL01);
+  assert.equal(z.status, 200, JSON.stringify(z.data));
+  assert.equal((await mods.db.one("SELECT status FROM sales_transactions WHERE pos_bill_id = 'T-ZERO'")).status, 'refunded');
+  assert.equal((await call('POST', '/api/pos/refunds', { posBillId: 'T-ZERO' }, posHL01)).status, 200);   // ส่งซ้ำ (เลขคืนเงินเดิม) ไม่ error
 });
 
 t('แลกแต้มพร้อมกันหลายคำขอ แต้มไม่ติดลบ', async () => {
