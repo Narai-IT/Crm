@@ -728,7 +728,7 @@ export async function recordSale(db, s) {
     const notify = brand && (brand.points_notify === 'all' || (brand.points_notify === 'min' && total >= Number(brand.points_notify_min)));
     const ident = notify && await db.one('SELECT line_user_id FROM member_line_identities WHERE member_id = $1 ORDER BY linked_at DESC LIMIT 1', [member.id]);
     if (ident) await queueMessage(db, { brandId: br.brand_id, lineUserId: ident.line_user_id, kind: 'points',
-      data: { billId: s.posBillId, branch: br.name, total, discount, pts: points, bal: balance, memberId: member.id } });
+      data: { billId: s.posBillId, branch: br.name, paidAt: txn.paid_at, total, discount, pts: points, bal: balance, memberId: member.id } });
   }
   return { txn, points, balance, discount, coupons: used.map((c) => c.id), vouchers };
 }
