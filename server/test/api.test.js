@@ -101,6 +101,17 @@ t('ใช้คูปองต้อนรับ 10% แล้วคืนเง
   assert.equal(z.status, 200, JSON.stringify(z.data));
   assert.equal((await mods.db.one("SELECT status FROM sales_transactions WHERE pos_bill_id = 'T-ZERO'")).status, 'refunded');
   assert.equal((await call('POST', '/api/pos/refunds', { posBillId: 'T-ZERO' }, posHL01)).status, 200);   // ส่งซ้ำ (เลขคืนเงินเดิม) ไม่ error
+  // POS แก้ไขบิล (คืนส่วนต่าง) แล้วค่อยยกเลิกทั้งบิล: แต้มหักตามสัดส่วนแล้วหักส่วนที่เหลือ · ส่งซ้ำไม่หักซ้ำ
+  const pe = await call('POST', '/api/pos/transactions', { posBillId: 'T-EDIT', memberId: me.id, items: [{ id: 'h1', name: 'x', price: 100, qty: 2 }] }, posHL01);
+  assert.equal(pe.data.points, 8);
+  const p1 = await call('POST', '/api/pos/refunds', { posBillId: 'T-EDIT', posRefundId: 'EDIT-T-EDIT-1', amount: 50, reason: 'ลบรายการ' }, posHL01);
+  assert.equal(p1.data.pointsReversed, 2);
+  assert.equal((await call('POST', '/api/pos/refunds', { posBillId: 'T-EDIT', posRefundId: 'EDIT-T-EDIT-1', amount: 50 }, posHL01)).data.duplicate, true);
+  assert.equal((await mods.db.one("SELECT status FROM sales_transactions WHERE pos_bill_id = 'T-EDIT'")).status, 'partial_refund');
+  const p2 = await call('POST', '/api/pos/refunds', { posBillId: 'T-EDIT', posRefundId: 'VOID-T-EDIT', reason: 'ยกเลิก' }, posHL01);
+  assert.equal(p2.data.pointsReversed, 6);
+  assert.equal((await mods.db.one("SELECT status FROM sales_transactions WHERE pos_bill_id = 'T-EDIT'")).status, 'refunded');
+  assert.equal((await call('POST', '/api/pos/refunds', { posBillId: 'T-EDIT', posRefundId: 'EDIT-T-EDIT-2', amount: 10 }, posHL01)).data.error, 'already_refunded');
 });
 
 t('แลกแต้มพร้อมกันหลายคำขอ แต้มไม่ติดลบ', async () => {
