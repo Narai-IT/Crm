@@ -733,7 +733,8 @@ export async function recordSale(db, s) {
   return { txn, points, balance, discount, coupons: used.map((c) => c.id), vouchers };
 }
 
-export async function refundSale(db, { branchId, posBillId, posRefundId, amount, by }) {
+export async function refundSale(db, { branchId, posBillId, posRefundId, amount, by, reason }) {
+  const why = String(reason || '').trim().slice(0, 300) || null;
   const t = await db.one('SELECT * FROM sales_transactions WHERE branch_id = $1 AND pos_bill_id = $2 FOR UPDATE', [branchId, posBillId]);
   if (!t) throw notFound('ไม่พบบิลนี้');
   const rid = posRefundId || 'R-' + posBillId;
@@ -743,20 +744,21 @@ export async function refundSale(db, { branchId, posBillId, posRefundId, amount,
   const done = await db.one('SELECT COALESCE(sum(amount),0) AS a, COALESCE(sum(points_reversed),0) AS p FROM refunds WHERE txn_id = $1', [t.id]);
   const remaining = t.total - done.a;
   const amt = amount == null ? remaining : Math.min(Number(amount), remaining);
-  if (!(amt > 0)) throw bad('amount_invalid', 'ยอดคืนเงินไม่ถูกต้อง');
+  // ไม่ระบุยอด = ยกเลิกทั้งบิล ใช้ได้กับบิล 0 บาทด้วย (จ่ายด้วยคูปอง/Voucher ทั้งบิล) เพื่อคืนคูปอง/Voucher
+  if (!(amt > 0) && !(amount == null && remaining <= 0.001)) throw bad('amount_invalid', 'ยอดคืนเงินไม่ถูกต้อง');
   const full = amt >= remaining - 0.001;
   // หักแต้มคืนตามสัดส่วนยอดที่คืนจริง
   const wantPts = full ? t.points_earned - done.p : Math.floor(t.points_earned * amt / t.total);
   let reversed = 0;
   if (t.member_id && wantPts > 0) {
     reversed = (await debit(db, { memberId: t.member_id, brandId: t.brand_id, branchId, type: 'refund', points: wantPts, refType: 'refund', refId: rid, key: 'refund:' + rid,
-      note: 'คืนเงินบิล ' + posBillId, actorType: 'pos', actorId: by, capAtBalance: true })).points;
+      note: 'คืนเงินบิล ' + posBillId + (why ? ' · ' + why : ''), actorType: 'pos', actorId: by, capAtBalance: true })).points;
   }
-  const refund = await db.one('INSERT INTO refunds (txn_id, pos_refund_id, amount, points_reversed, created_by) VALUES ($1,$2,$3,$4,$5) RETURNING *', [t.id, rid, amt, reversed, by || null]);
+  const refund = await db.one('INSERT INTO refunds (txn_id, pos_refund_id, amount, points_reversed, created_by, reason) VALUES ($1,$2,$3,$4,$5,$6) RETURNING *', [t.id, rid, Math.max(0, amt), reversed, by || null, why]);
   await db.q('UPDATE sales_transactions SET status = $2 WHERE id = $1', [t.id, full ? 'refunded' : 'partial_refund']);
   let returned = 0;
   if (full) returned = (await db.q("UPDATE member_coupons SET status = 'ready', used_at = NULL, used_txn_id = NULL, used_branch_id = NULL, used_amount = NULL WHERE used_txn_id = $1 AND expires_at > now() RETURNING id", [t.id])).length;
-  await audit(db, { type: 'staff', id: by }, 'refund', { type: 'sale', id: posBillId }, 'คืนเงิน ' + amt + ' บาท · หักแต้ม ' + reversed);
+  await audit(db, { type: 'staff', id: by }, 'refund', { type: 'sale', id: posBillId }, 'คืนเงิน ' + Math.max(0, amt) + ' บาท · หักแต้ม ' + reversed + (why ? ' · ' + why : ''));
   return { refund, pointsReversed: reversed, couponsReturned: returned };
 }
 
