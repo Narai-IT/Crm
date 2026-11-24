@@ -480,6 +480,29 @@ t('แจ้งแต้มทาง LINE: ค่าเริ่มต้นไ�
   const { buildMessages } = await import('../src/services/line.js');
   const flex = buildMessages('points', msg.data, { id: 'humlai', short_name: 'หำไหล', theme_color: '#C7481A', ink_color: '#8A3A16' });
   assert.ok(JSON.stringify(flex).includes(paid.s), JSON.stringify(flex));
+  // ปุ่มในข้อความแจ้งแต้ม: ดูใบเสร็จ (ไม่มีคำว่าขอใบกำกับภาษีแล้ว)
+  assert.ok(JSON.stringify(flex).includes('"label":"ดูใบเสร็จ"'));
+  assert.ok(!JSON.stringify(flex).includes('ใบกำกับ'));
+
+  // สำเนาใบเสร็จในบัตรสมาชิก + PDF
+  const bills = (await call('GET', '/api/liff/bills?brand=humlai', undefined, u)).data;
+  const b4 = bills.find((x) => x.pos_bill_id === 'NT-4');
+  const rc = await call('POST', '/api/liff/bills/' + b4.id + '/receipt', {}, u);
+  assert.equal(rc.status, 200, JSON.stringify(rc.data));
+  assert.equal(rc.data.receipt.billNo, 'NT-4'); assert.equal(rc.data.receipt.total, 50); assert.equal(rc.data.receipt.memberId, mid);
+  assert.deepEqual(rc.data.receipt.items, [{ name: 'x', qty: 1, amount: 50 }]);
+  assert.equal(rc.data.receipt.paidAtText, paid.s);
+  assert.equal(typeof rc.data.receipt.balance, 'number');
+  // บิลของคนอื่นดูไม่ได้
+  assert.equal((await call('POST', '/api/liff/bills/' + b4.id + '/receipt', {}, asUser)).status, 404);
+  const pdf = await fetch(base_url() + rc.data.pdfUrl);
+  assert.equal(pdf.status, 200); assert.equal(pdf.headers.get('content-type'), 'application/pdf');
+  assert.match(pdf.headers.get('content-disposition'), /inline; filename="receipt-NT-4\.pdf"/);
+  const bytes = Buffer.from(await pdf.arrayBuffer());
+  assert.equal(bytes.subarray(0, 5).toString(), '%PDF-'); assert.ok(bytes.length > 5000);
+  // ลิงก์ปลอม/แก้ไข = ใช้ไม่ได้
+  const forged = await fetch(base_url() + rc.data.pdfUrl.replace(/receipts\/(.)/, 'receipts/X$1'));
+  assert.equal(forged.status, 410);
   const rule = (await call('GET', '/api/admin/earn-rules', undefined, adm)).data.find((r) => r.brand_id === 'humlai');
   assert.equal(rule.points_notify, 'all');
 });

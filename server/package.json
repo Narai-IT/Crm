@@ -4,7 +4,9 @@
   "private": true,
   "description": "Group CRM backend: multi-brand LINE OA membership on PostgreSQL",
   "type": "module",
-  "engines": { "node": ">=20.6" },
+  "engines": {
+    "node": ">=20.6"
+  },
   "scripts": {
     "start": "node --env-file=.env src/index.js",
     "dev": "node --env-file=.env --watch src/index.js",
@@ -15,6 +17,7 @@
     "test": "node --env-file=.env --test test/*.test.js"
   },
   "dependencies": {
+    "pdfkit": "^0.15.2",
     "pg": "^8.13.1"
   }
 }

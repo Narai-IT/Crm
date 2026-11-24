@@ -66,6 +66,11 @@ export function buildServer() {
         logApi({ method: req.method, path: path + (url.search || ''), body: req.method === 'GET' ? null : body, kind: kindOf(path),
           result: '200' + (typeof summary === 'function' ? ' · ' + summary(body, out) : summary ? ' · ' + summary : '') });
       }
+      // ไฟล์ (เช่น PDF ใบเสร็จ) ส่งเป็นไฟล์ตรง ๆ ไม่ใช่ JSON
+      if (out && out.__file) {
+        res.writeHead(200, { 'content-type': out.__file.type, 'content-disposition': out.__file.disposition || 'inline', 'cache-control': 'private, no-store', 'x-content-type-options': 'nosniff' });
+        return res.end(out.__file.data);
+      }
       send(res, 200, out ?? { ok: true });
       if (req.method !== 'GET') setImmediate(() => drainOutbox().catch(() => {}));
     } catch (e) {

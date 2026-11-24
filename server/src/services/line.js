@@ -61,7 +61,7 @@ export function buildMessages(kind, data, brand, branches) {
     [row('เลขสมาชิก', data.memberId), row('แต้มต้อนรับ', '+' + data.pts + ' แต้ม'), ...(data.coupon ? [row('คูปอง', data.coupon)] : [])], [uriBtn('ดูบัตรสมาชิก', liff(brand.id), c)]) }];
   if (kind === 'points') return [{ type: 'flex', altText: 'ได้รับ +' + data.pts + ' แต้ม', contents: bubble(brand, 'ได้รับ +' + data.pts + ' แต้ม', 'ขอบคุณที่อุดหนุน',
     [row('สมาชิก', data.memberId), row('สาขา', data.branch), ...(data.paidAt ? [row('วันเวลา', thaiDateTime(data.paidAt))] : []), row('ยอดชำระ', Number(data.total).toFixed(2) + ' บาท'), ...(data.discount ? [row('ส่วนลดคูปอง', '-' + Number(data.discount).toFixed(2))] : []), row('แต้ม ' + brand.short_name + ' คงเหลือ', String(data.bal))],
-    [uriBtn('ดูบัตรสมาชิก', liff(brand.id), c), uriBtn('ดูใบเสร็จ / ขอใบกำกับภาษี', liff(brand.id, 'history'), brand.ink_color)]) }];
+    [uriBtn('ดูบัตรสมาชิก', liff(brand.id), c), uriBtn('ดูใบเสร็จ', liff(brand.id, 'history'), brand.ink_color)]) }];
   if (kind === 'broadcast') {
     const out = [{ type: 'text', text: data.text }];
     if (data.coupon) out.push({ type: 'flex', altText: 'คูปอง ' + data.coupon, contents: bubble(brand, data.coupon, 'คูปองถูกเพิ่มเข้ากระเป๋าแล้ว', [txt('ใช้ได้ที่ ' + brand.name + ' ทุกสาขา', { size: 'sm' })], [uriBtn('ดูคูปองของฉัน', liff(brand.id, 'coupons'), c)]) });

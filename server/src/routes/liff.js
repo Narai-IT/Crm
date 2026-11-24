@@ -2,7 +2,8 @@
 import { q, one, tx } from '../db.js';
 import { bad, notFound } from '../http.js';
 import { liffUser } from '../auth.js';
-import { isPhone, qrToken, memberPin, couponQrToken } from '../util.js';
+import { isPhone, qrToken, memberPin, couponQrToken, signToken } from '../util.js';
+import { receiptData } from '../services/receipt.js';
 import * as core from '../services/core.js';
 import { isFriend } from '../services/line.js';
 
@@ -120,7 +121,15 @@ export default function (r) {
 
   r.get('/api/liff/bills', async (req, _b, url) => {
     const { m } = await needMember(req);
-    return q('SELECT pos_bill_id, branch_id, brand_id, subtotal, discount, total, points_earned, status, paid_at, items FROM sales_transactions WHERE member_id = $1 AND ($2::text IS NULL OR brand_id = $2) ORDER BY paid_at DESC LIMIT 100', [m.id, url.searchParams.get('brand')]);
+    return q('SELECT id::text AS id, pos_bill_id, branch_id, brand_id, subtotal, discount, total, points_earned, status, paid_at, items FROM sales_transactions WHERE member_id = $1 AND ($2::text IS NULL OR brand_id = $2) ORDER BY paid_at DESC LIMIT 100', [m.id, url.searchParams.get('brand')]);
+  });
+  // สำเนาใบเสร็จของบิล (ดูในบัตรสมาชิก) + ลิงก์ PDF อายุ 15 นาที สำหรับเปิดในเบราว์เซอร์ข้างนอก (ในแอป LINE โหลดไฟล์ตรง ๆ ไม่ได้)
+  r.post('/api/liff/bills/:id/receipt', async (req, _b, _u, p) => {
+    const { m } = await needMember(req);
+    const id = String(p.id).replace(/\D/g, '');
+    if (!id) throw notFound('ไม่พบบิลนี้');
+    const receipt = await receiptData({ q, one }, { txnId: id, memberId: m.id });
+    return { receipt, pdfUrl: '/api/public/receipts/' + signToken({ rcp: id, m: m.id }, 15 * 60) + '/' + encodeURIComponent('receipt-' + receipt.billNo.replace(/[^\w-]+/g, '') + '.pdf') };
   });
   r.get('/api/liff/ledger', async (req, _b, url) => {
     const { m } = await needMember(req);
