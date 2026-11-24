@@ -145,3 +145,13 @@ h1, h2, h3 { font-family: var(--f-display); font-weight: 600; margin: 0; }
 .pdpa details summary { cursor: pointer; color: var(--ai); font-weight: 600; min-height: 32px; display: flex; align-items: center; }
 .pdpa details ul { margin: 4px 0 0; padding-left: 18px; display: flex; flex-direction: column; gap: 6px; }
 .nowrap { white-space: nowrap; }
+
+/* สำเนาใบเสร็จในบัตรสมาชิก */
+.rcpt { max-height: 62vh; overflow-y: auto; display: flex; flex-direction: column; gap: 3px; }
+.rcpt-h { display: flex; flex-direction: column; align-items: center; text-align: center; margin-bottom: 6px; }
+.rcpt-h b { font-family: var(--f-display); font-size: 18px; }
+.rcpt-h small { color: var(--muted); }
+.rcpt hr { border: 0; border-top: 1px dashed var(--line); margin: 6px 0; width: 100%; }
+.rcpt .kv.tot { font-family: var(--f-display); font-size: 17px; font-weight: 700; }
+.rcpt .kv.tot span:first-child { color: var(--ink); }
+.rcpt-note { margin-top: 8px; border: 1px solid var(--a); color: var(--ai); border-radius: 8px; padding: 4px 8px; font-size: 12px; text-align: center; }

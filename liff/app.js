@@ -230,10 +230,29 @@
           '<span style="text-align:right"><b class="num">' + baht(x.total) + ' ฿</b><br><small class="' + (x.status === 'refunded' ? 'minus' : 'plus') + '">' + (x.status === 'refunded' ? 'คืนเงินแล้ว' : '+' + fmt(x.points_earned) + ' แต้ม') + '</small></span></div></button>' +
           (open ? '<div style="border-top:1px solid var(--line);padding-top:6px">' + x.items.map((it) => '<div class="kv"><span>' + esc(it.name) + ' x' + it.qty + '</span><span class="num">' + baht(it.price * it.qty) + '</span></div>').join('') +
             (x.discount > 0 ? '<div class="kv"><span>ส่วนลด</span><span class="num">-' + baht(x.discount) + '</span></div>' : '') + '<small class="muted">เลขที่บิล ' + esc(x.pos_bill_id) + '</small>' +
-            '<button class="btn ghost sm" style="width:100%;margin-top:6px" data-a="tax" data-v="' + esc(x.pos_bill_id) + '">ขอใบกำกับภาษีเต็มรูป</button></div>' : '') + '</div>';
+            '<div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:8px"><button class="btn sm" data-a="rcpt" data-v="' + esc(x.id) + '">ดูใบเสร็จ</button>' +
+            '<button class="btn sm" style="background:var(--ai)" data-a="rcptPdf" data-v="' + esc(x.id) + '">ดาวน์โหลด PDF</button></div></div>' : '') + '</div>';
       }).join('') : '<div class="empty">ยังไม่มีบิลที่ ' + esc(brand().short_name) + '</div>')
       : '<div class="card">' + (S.ledger.length ? S.ledger.map((l) => '<div class="ldg"><span>' + esc(l.note || l.entry_type) + '<br><small class="muted">' + date(l.created_at) + '</small></span><span class="p ' + (l.points >= 0 ? 'plus' : 'minus') + '">' + (l.points >= 0 ? '+' : '') + fmt(l.points) + '</span></div>').join('') : '<div class="empty">ยังไม่มีรายการแต้ม</div>') + '</div>';
     return '<div class="seg"><button data-a="hist" data-v="bills" aria-pressed="' + (S.hist === 'bills') + '">บิล</button><button data-a="hist" data-v="ledger" aria-pressed="' + (S.hist === 'ledger') + '">สมุดแต้ม</button></div>' + body;
+  }
+  // สำเนาใบเสร็จ (หน้าตาเดียวกับไฟล์ PDF) · ไม่ใช่ใบกำกับภาษี
+  function receiptHtml(r) {
+    const kv = (k, v, cls) => '<div class="kv' + (cls ? ' ' + cls : '') + '"><span>' + k + '</span><span class="num">' + v + '</span></div>';
+    return '<div class="rcpt"><div class="rcpt-h"><b>' + esc(r.brandName) + '</b><span>สาขา ' + esc(r.branchName) + '</span><small>ใบเสร็จรับเงิน (สำเนา)</small></div>' +
+      kv('เลขที่บิล', esc(r.billNo)) + kv('วันที่', esc(r.paidAtText)) + kv('สมาชิก', esc(r.memberId)) + '<hr>' +
+      r.items.map((i) => kv(i.qty + '× ' + esc(i.name), baht(i.amount))).join('') + '<hr>' +
+      (r.discount ? kv('รวมรายการ', baht(r.subtotal)) + kv('ส่วนลด', '-' + baht(r.discount)) : '') +
+      kv('รวมทั้งสิ้น', '฿' + baht(r.total), 'tot') +
+      (r.voucher ? kv('ชำระด้วย Voucher', baht(r.voucher)) : '') +
+      (r.refunded ? kv(r.status === 'refunded' ? 'ยกเลิก/คืนเงินทั้งบิล' : 'คืนเงินบางส่วน', '-' + baht(r.refunded)) : '') + '<hr>' +
+      kv('แต้มที่ได้รับ', (r.points >= 0 ? '+' : '') + fmt(r.points)) + (r.balance != null ? kv('แต้มคงเหลือ (หลังบิลนี้)', fmt(r.balance)) : '') +
+      '<div class="rcpt-note">สำเนาจากบัตรสมาชิก LINE · ไม่ใช่ใบกำกับภาษี</div></div>';
+  }
+  // PDF เปิดในเบราว์เซอร์ของมือถือ (ในแอป LINE บันทึกไฟล์ตรง ๆ ไม่ได้) · ลิงก์อายุ 15 นาที
+  function openPdf(url) {
+    const abs = new URL(url, location.origin).href;
+    if (S.inClient && window.liff) window.liff.openWindow({ url: abs, external: true }); else window.open(abs, '_blank');
   }
   function profileView() {
     const m = S.me.member; const links = S.me.links || [];
@@ -338,6 +357,8 @@
         (r.description ? '<small class="muted" style="white-space:pre-line">' + esc(r.description) + '</small>' : '') +
         '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px"><button class="btn ghost" data-a="unpick">ยกเลิก</button><button class="btn" data-a="redeem">ยืนยันแลก</button></div></div>';
     }
+    if (S.receipt) sheet = '<div class="scrim" data-a="rcptClose"></div><div class="sheet" role="dialog" aria-label="ใบเสร็จ">' + receiptHtml(S.receipt.receipt) +
+      '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px"><button class="btn ghost" data-a="rcptClose">ปิด</button><button class="btn" data-a="rcptPdf" data-v="' + esc(S.receipt.receipt.id) + '">ดาวน์โหลด PDF</button></div></div>';
     $app.innerHTML = dev + head(titles[S.tab] + ' · ' + brand().short_name) + '<main class="body">' + views[S.tab]() + '</main>' + (S.tab !== 'profile' ? nav() : '') + sheet;
   }
   async function refresh() { await loadMe(); await loadTab(); render(); }
@@ -373,7 +394,9 @@
     },
     hist: (v) => { S.hist = v; render(); },
     bill: (v) => { S.openBill = S.openBill === v ? null : v; render(); },
-    tax: async (v) => { await api('POST', '/api/liff/tax-invoice-requests', { posBillId: v }); toast('ส่งคำขอใบกำกับภาษีแล้ว พนักงานจะติดต่อกลับ'); },
+    rcpt: async (v) => { S.receipt = await api('POST', '/api/liff/bills/' + encodeURIComponent(v) + '/receipt'); render(); },
+    rcptClose: () => { S.receipt = null; render(); },
+    rcptPdf: async (v) => { const r = await api('POST', '/api/liff/bills/' + encodeURIComponent(v) + '/receipt'); openPdf(r.pdfUrl); },
     consent: async (v, el) => { await api('PATCH', '/api/liff/consents', { brand: v, marketing: el.checked }); toast(el.checked ? 'เปิดรับข่าวสารแล้ว' : 'ปิดรับข่าวสารแล้ว'); await loadMe(); render(); },
     otp: async () => {
       const r = S.reg; r.err = '';

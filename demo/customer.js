@@ -36,7 +36,7 @@
         '<div class="kv"><span>ยอดชำระ</span><b>' + baht(bill.total) + ' บาท</b></div>' +
         (bill.discount ? '<div class="kv"><span>ส่วนลดคูปอง</span><span>-' + baht(bill.discount) + '</span></div>' : '') +
         '<div class="kv" style="border-top:1px solid #EFE4DC;padding-top:6px"><span>แต้ม ' + esc(b.short) + ' คงเหลือ</span><b style="color:' + b.ink + '">' + fmt(m.bal != null ? m.bal : R.balance(mem.id, bill.brand)) + '</b></div></div>' +
-        '<div class="flex-f"><button class="fbtn" data-act="c.liff" data-tab="home">ดูบัตรสมาชิก</button><button class="fbtn ghost" data-act="c.liff" data-tab="history">ดูใบเสร็จ / ขอใบกำกับภาษี</button></div></div>';
+        '<div class="flex-f"><button class="fbtn" data-act="c.liff" data-tab="home">ดูบัตรสมาชิก</button><button class="fbtn ghost" data-act="c.liff" data-tab="history">ดูใบเสร็จ</button></div></div>';
     }
     if (m.kind === 'promo') {
       inner = '<div class="carousel">' + [['โปรเดือนนี้', '[ชื่อโปรโมชั่น] · ถึง [วันที่]'], ['สมาชิกเท่านั้น', 'แสดงบัตรสมาชิกรับสิทธิ์เพิ่ม']].map((p) =>
@@ -166,7 +166,7 @@
         return '<div class="order"><button style="all:unset;cursor:pointer;display:flex;justify-content:space-between;gap:8px" data-act="c.bill" data-id="' + x.id + '" aria-expanded="' + open + '"><span><b>' + date(x.at) + '</b><br><span style="font-size:12px;color:#6B5146">' + esc(R.branch(x.branch).name) + ' · ' + x.items.length + ' รายการ</span></span><span style="text-align:right"><b class="num">' + baht(x.total) + ' ฿</b><br><span style="font-size:12px;color:' + (x.status === 'refunded' ? '#B42318' : '#2F7D4F') + '">' + (x.status === 'refunded' ? 'คืนเงินแล้ว' : '+' + x.pts + ' แต้ม') + '</span></span></button>' +
           (open ? '<div style="font-size:13px;border-top:1px solid #F0E8E2;padding-top:6px">' + x.items.map((it) => '<div class="kv"><span>' + esc(it.name) + ' x' + it.qty + '</span><span class="num">' + baht(it.price * it.qty) + '</span></div>').join('') +
             (x.discount ? '<div class="kv"><span>ส่วนลดคูปอง</span><span>-' + baht(x.discount) + '</span></div>' : '') + '<div style="font-size:12px;color:#6B5146;margin-top:4px">เลขที่บิล ' + esc(x.id) + '</div>' +
-            '<button class="pbtn ghost" style="min-height:40px;margin-top:6px;width:100%" data-act="c.tax">ขอใบกำกับภาษีเต็มรูป</button></div>' : '') + '</div>';
+            '</div>' : '') + '</div>';
       }).join('') : '<div class="empty">ยังไม่มีบิลที่ ' + esc(brand().short) + '</div>';
     } else {
       body = '<div style="background:#fff;border:1px solid #EDE5DF;border-radius:14px;padding:4px 12px">' + (led.length ? led.map((l) => '<div class="ldg"><span>' + esc(l.note) + '<br><small style="color:#6B5146">' + date(l.at) + '</small></span><span class="p ' + (l.pts >= 0 ? 'plus' : 'minus') + '">' + (l.pts >= 0 ? '+' : '') + fmt(l.pts) + '</span></div>').join('') : '<div class="empty">ยังไม่มีรายการแต้ม</div>') + '</div>';
