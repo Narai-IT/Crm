@@ -32,6 +32,7 @@
       inner = '<div class="flex"><div class="flex-h"><small>ขอบคุณที่อุดหนุน</small><b>ได้รับ +' + fmt(bill.pts) + ' แต้ม</b></div><div class="flex-b">' +
         '<div class="kv"><span>สมาชิก</span><b>' + esc(mem.id) + '</b></div>' +
         '<div class="kv"><span>สาขา</span><span>' + esc(R.branch(bill.branch).name) + '</span></div>' +
+        '<div class="kv"><span>วันเวลา</span><span>' + new Intl.DateTimeFormat('th-TH', { timeZone: 'Asia/Bangkok', day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false }).format(new Date(bill.at)) + '</span></div>' +
         '<div class="kv"><span>ยอดชำระ</span><b>' + baht(bill.total) + ' บาท</b></div>' +
         (bill.discount ? '<div class="kv"><span>ส่วนลดคูปอง</span><span>-' + baht(bill.discount) + '</span></div>' : '') +
         '<div class="kv" style="border-top:1px solid #EFE4DC;padding-top:6px"><span>แต้ม ' + esc(b.short) + ' คงเหลือ</span><b style="color:' + b.ink + '">' + fmt(m.bal != null ? m.bal : R.balance(mem.id, bill.brand)) + '</b></div></div>' +

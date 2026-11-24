@@ -43,6 +43,8 @@ export async function isFriend(db, brandId, lineUserId) {
 const txt = (text, extra = {}) => ({ type: 'text', text, wrap: true, ...extra });
 const row = (k, v) => ({ type: 'box', layout: 'horizontal', contents: [txt(k, { size: 'sm', color: '#6B5146', flex: 3 }), txt(v, { size: 'sm', align: 'end', weight: 'bold', flex: 4 })] });
 const uriBtn = (label, uri, color) => ({ type: 'button', style: 'primary', color, height: 'sm', action: { type: 'uri', label, uri } });
+// วันเวลาของบิลแบบไทย (พ.ศ.) ตามเวลาไทยเสมอ ไม่ขึ้นกับโซนเวลาของเครื่อง server เช่น 24/11/2569 14:05
+const thaiDateTime = (v) => new Intl.DateTimeFormat('th-TH', { timeZone: 'Asia/Bangkok', day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false }).format(new Date(v));
 const liff = (brand, tab) => 'https://liff.line.me/' + (process.env.LIFF_ID || 'LIFF_ID') + '?brand=' + brand + (tab ? '&tab=' + tab : '');
 function bubble(brand, head, sub, rows, buttons) {
   return {
@@ -58,7 +60,7 @@ export function buildMessages(kind, data, brand, branches) {
   if (kind === 'welcome') return [{ type: 'flex', altText: 'สมัครสมาชิกสำเร็จ ' + data.memberId, contents: bubble(brand, 'ยินดีต้อนรับ', 'สมัครสมาชิกสำเร็จ',
     [row('เลขสมาชิก', data.memberId), row('แต้มต้อนรับ', '+' + data.pts + ' แต้ม'), ...(data.coupon ? [row('คูปอง', data.coupon)] : [])], [uriBtn('ดูบัตรสมาชิก', liff(brand.id), c)]) }];
   if (kind === 'points') return [{ type: 'flex', altText: 'ได้รับ +' + data.pts + ' แต้ม', contents: bubble(brand, 'ได้รับ +' + data.pts + ' แต้ม', 'ขอบคุณที่อุดหนุน',
-    [row('สมาชิก', data.memberId), row('สาขา', data.branch), row('ยอดชำระ', Number(data.total).toFixed(2) + ' บาท'), ...(data.discount ? [row('ส่วนลดคูปอง', '-' + Number(data.discount).toFixed(2))] : []), row('แต้ม ' + brand.short_name + ' คงเหลือ', String(data.bal))],
+    [row('สมาชิก', data.memberId), row('สาขา', data.branch), ...(data.paidAt ? [row('วันเวลา', thaiDateTime(data.paidAt))] : []), row('ยอดชำระ', Number(data.total).toFixed(2) + ' บาท'), ...(data.discount ? [row('ส่วนลดคูปอง', '-' + Number(data.discount).toFixed(2))] : []), row('แต้ม ' + brand.short_name + ' คงเหลือ', String(data.bal))],
     [uriBtn('ดูบัตรสมาชิก', liff(brand.id), c), uriBtn('ดูใบเสร็จ / ขอใบกำกับภาษี', liff(brand.id, 'history'), brand.ink_color)]) }];
   if (kind === 'broadcast') {
     const out = [{ type: 'text', text: data.text }];

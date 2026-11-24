@@ -453,6 +453,12 @@ t('แจ้งแต้มทาง LINE: ค่าเริ่มต้นไ�
   assert.equal((await call('PATCH', '/api/admin/brands/humlai/notify', { pointsNotify: 'all' }, adm)).status, 200);
   await bill('NT-4', 50);
   assert.equal(await pts(), 2);
+  // ข้อความแจ้งแต้มมีวันเวลาของบิล (เวลาไทย พ.ศ.)
+  const msg = await mods.db.one("SELECT data FROM line_messages WHERE line_user_id = 'Unotify01' AND kind = 'points' ORDER BY id DESC LIMIT 1");
+  const paid = await mods.db.one("SELECT to_char(paid_at AT TIME ZONE 'Asia/Bangkok', 'DD/MM/') || (extract(year FROM paid_at AT TIME ZONE 'Asia/Bangkok')::int + 543) || to_char(paid_at AT TIME ZONE 'Asia/Bangkok', ' HH24:MI') AS s FROM sales_transactions WHERE pos_bill_id = 'NT-4'");
+  const { buildMessages } = await import('../src/services/line.js');
+  const flex = buildMessages('points', msg.data, { id: 'humlai', short_name: 'หำไหล', theme_color: '#C7481A', ink_color: '#8A3A16' });
+  assert.ok(JSON.stringify(flex).includes(paid.s), JSON.stringify(flex));
   const rule = (await call('GET', '/api/admin/earn-rules', undefined, adm)).data.find((r) => r.brand_id === 'humlai');
   assert.equal(rule.points_notify, 'all');
 });
