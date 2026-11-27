@@ -155,3 +155,9 @@ h1, h2, h3 { font-family: var(--f-display); font-weight: 600; margin: 0; }
 .rcpt .kv.tot { font-family: var(--f-display); font-size: 17px; font-weight: 700; }
 .rcpt .kv.tot span:first-child { color: var(--ink); }
 .rcpt-note { margin-top: 8px; border: 1px solid var(--a); color: var(--ai); border-radius: 8px; padding: 4px 8px; font-size: 12px; text-align: center; }
+
+/* หน้าแลกแต้ม: จำนวนของรางวัลที่เหลือ + จำกัดครั้งต่อคน */
+.reward .stock { align-self: flex-start; font-size: 12px; font-weight: 600; border-radius: 999px; padding: 2px 9px; background: var(--as); color: var(--ai); }
+.reward .stock.low { background: #FEF3C7; color: #B45309; }
+.reward .stock.out { background: #FEE2E2; color: #B91C1C; }
+.reward .limit { color: var(--ink); font-size: 12px; font-weight: 600; }

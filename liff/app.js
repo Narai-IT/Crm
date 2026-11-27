@@ -214,10 +214,16 @@
       (cats.length > 2 ? '<div class="seg">' + cats.map((c) => '<button data-a="rcat" data-v="' + c[0] + '" aria-pressed="' + (S.rcat === c[0]) + '">' + c[1] + '</button>').join('') + '</div>' : '') +
       (list.length ? '<div class="rgrid">' + list.map((r) => {
         // why = แลกไม่ได้เพราะหมด/ระดับ/ครบสิทธิ์ (ระบบสมาชิกบอกมา)
-        const lack = r.points_cost - bal; const no = r.why || (lack > 0 ? 'ขาดอีก ' + fmt(lack) : '');
+        const lack = r.points_cost - bal; const no = r.why || (lack > 0 ? 'ขาด ' + fmt(lack) + ' แต้ม' : '');
+        // จำนวนของรางวัลที่เหลือ (เฉพาะที่ตั้งจำกัดไว้) · เหลือไม่เกิน 5 = ใกล้หมด
+        const stock = r.stock === null || r.stock === undefined ? ''
+          : r.stock <= 0 ? '<span class="stock out">หมดแล้ว</span>'
+            : '<span class="stock' + (r.stock <= 5 ? ' low' : '') + '">' + (r.stock <= 5 ? 'ใกล้หมด · ' : '') + 'เหลือ ' + fmt(r.stock) + ' ชิ้น</span>';
+        const per = { day: 'วัน', week: 'สัปดาห์', month: 'เดือน', year: 'ปี' }[r.limit_period];
+        const limit = r.limit_count ? '<small class="limit">แลกได้ ' + fmt(r.limit_count) + ' ครั้ง/คน' + (per ? '/' + per : '') + '</small>' : '';
         return '<div class="reward' + (r.image ? ' has-img' : '') + '">' + (r.image ? '<img class="art" alt="" loading="lazy" src="' + esc(r.image) + '">' : '<div class="art">' + esc(r.name) + '</div>') +
           '<div class="in"><b style="font-size:14px">' + esc(r.name) + '</b>' + (r.description ? '<small class="desc">' + esc(r.description) + '</small>' : '') +
-          '<span class="c num">' + fmt(r.points_cost) + ' แต้ม</span>' + (r.endDay ? '<small class="muted">แลกได้ถึง ' + date(r.endDay + 'T12:00:00+07:00') + '</small>' : '') +
+          '<span class="c num">' + fmt(r.points_cost) + ' แต้ม</span>' + stock + limit + (r.endDay ? '<small class="muted">แลกได้ถึง ' + date(r.endDay + 'T12:00:00+07:00') + '</small>' : '') +
           '<button class="btn sm" style="margin-top:auto" data-a="pick" data-v="' + r.id + '"' + (no ? ' disabled' : '') + '>' + esc(no || 'แลกเลย') + '</button></div></div>';
       }).join('') + '</div>' : '<div class="empty">ยังไม่มีของรางวัล</div>') +
       '<p class="muted" style="font-size:12px;margin:0">แลกแล้วได้เป็นคูปองในเมนู "คูปอง" ยื่นให้พนักงานสแกนตอนชำระเงิน</p>';
