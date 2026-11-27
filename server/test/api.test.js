@@ -448,6 +448,14 @@ t('หน้าร้าน: ดูคูปอง/รางวัล · จอ�
   assert.ok(ok.data.verifyToken);
   assert.equal((await call('POST', '/api/pos/members/wallet', { memberId: mid, requireVerify: true, verifyToken: ok.data.verifyToken }, posHL01)).status, 200);
   assert.equal((await call('POST', '/api/pos/members/wallet', { memberId: 'MB-0000001', requireVerify: true, verifyToken: ok.data.verifyToken }, posHL01)).status, 401);
+  // ล้างข้อมูลแล้วเลขสมาชิกเดิมถูกใช้ซ้ำ (คนละคน สมัครคนละเวลา) → token เก่าในมือถือใช้ไม่ได้ ต้องยืนยันใหม่
+  await mods.db.q("UPDATE members SET created_at = created_at - interval '1 day' WHERE id = $1", [mid]);
+  assert.equal((await call('POST', '/api/pos/members/wallet', { memberId: mid, requireVerify: true, verifyToken: ok.data.verifyToken }, posHL01)).status, 401);
+  await mods.db.q("UPDATE members SET created_at = created_at + interval '1 day' WHERE id = $1", [mid]);
+  assert.equal((await call('POST', '/api/pos/members/wallet', { memberId: mid, requireVerify: true, verifyToken: ok.data.verifyToken }, posHL01)).status, 200);
+  // token แบบเก่า (ไม่มีเวลาสมัครผูกไว้) ใช้ไม่ได้แล้ว
+  const { signToken } = await import('../src/util.js');
+  assert.equal((await call('POST', '/api/pos/members/wallet', { memberId: mid, requireVerify: true, verifyToken: signToken({ vm: mid }, 3600) }, posHL01)).status, 401);
 
   // บิลมาถึงช้า คูปองใช้ไม่ได้แล้ว: ยังบันทึกบิล ใช้ส่วนลดที่ POS ให้ไป ไม่ตัดคูปอง
   const late = await call('POST', '/api/pos/transactions', { posBillId: 'CPN-2', memberId: mid, couponIds: [welcome.id], couponRef: 'R9', couponDiscount: 30, paidTotal: 270, items: [{ id: 'a', name: 'x', price: 300, qty: 1 }] }, posHL01);
