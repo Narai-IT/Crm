@@ -68,12 +68,14 @@ export default function (r) {
 
   // ── คูปอง/แลกแต้มที่หน้าร้าน ──
   // หน้าลูกค้าสั่งเอง (requireVerify) ต้องมี verifyToken จากรหัสที่ส่งเข้า LINE ของสมาชิก · หน้าขายของพนักงานไม่ต้อง (พนักงานสแกนบัตร/ถามลูกค้าเอง)
-  const memberOf = (body) => {
+  // verifyToken ผูกกับสมาชิกคนนั้นจริง (เวลาสมัคร) ไม่ใช่แค่เลขสมาชิก · ถ้าล้างข้อมูลแล้วเลขเดิมถูกใช้ซ้ำ มือถือที่เคยล็อกอินไว้ต้องยืนยันใหม่
+  const memberStamp = async (id) => { const m = await one('SELECT floor(extract(epoch FROM created_at))::bigint::text AS t FROM members WHERE id = $1', [id]); return m ? m.t : null; };
+  const memberOf = async (body) => {
     const id = String(body.memberId || '');
     if (!/^MB-\d{7}$/.test(id)) throw bad('member_required', 'ไม่พบเลขสมาชิก');
     if (body.verifyToken || body.requireVerify) {
       const v = verifyToken(String(body.verifyToken || ''));
-      if (!v || v.vm !== id) throw new HttpError(401, 'verify_required', 'ยืนยันตัวตนด้วยรหัสที่ส่งไปใน LINE ก่อน');
+      if (!v || v.vm !== id || !v.mt || v.mt !== await memberStamp(id)) throw new HttpError(401, 'verify_required', 'ยืนยันตัวตนด้วยรหัสที่ส่งไปใน LINE ก่อน');
     }
     return id;
   };
@@ -85,7 +87,8 @@ export default function (r) {
   });
   r.post('/api/pos/members/wallet', async (req, body) => {
     const t = await posTerminal(req);
-    return tx((db) => core.posWallet(db, { memberId: memberOf(body), brandId: t.brandId, subtotal: body.subtotal, ref: body.ref ? String(body.ref) : null, items: body.items }));
+    const memberId = await memberOf(body);
+    return tx((db) => core.posWallet(db, { memberId, brandId: t.brandId, subtotal: body.subtotal, ref: body.ref ? String(body.ref) : null, items: body.items }));
   });
   // หน้าพนักงาน (mode = staff): ใช้คูปองได้เฉพาะที่สแกน QR จากบัตรสมาชิกของลูกค้า (scanProof จาก resolve) · หน้าลูกค้าสั่งเองกดใช้จากมือถือตัวเองได้
   const needScan = (body, couponId, memberId) => {
@@ -95,8 +98,9 @@ export default function (r) {
   };
   r.post('/api/pos/coupons/reserve', async (req, body) => {
     const t = await posTerminal(req);
-    needScan(body, body.couponId, memberOf(body));
-    const coupon = await tx((db) => core.reserveCoupon(db, { memberId: memberOf(body), brandId: t.brandId, couponId: body.couponId, ref: String(body.ref || ''), subtotal: body.subtotal, minutes: Number(body.minutes) || 30, items: body.items }));
+    const memberId = await memberOf(body);
+    needScan(body, body.couponId, memberId);
+    const coupon = await tx((db) => core.reserveCoupon(db, { memberId, brandId: t.brandId, couponId: body.couponId, ref: String(body.ref || ''), subtotal: body.subtotal, minutes: Number(body.minutes) || 30, items: body.items }));
     return { coupon };
   }, (b, out) => 'จองคูปอง ' + (out?.coupon?.code || ''));
   // Voucher (ใช้แทนเงิน): ยิง QR / พิมพ์รหัส Voucher กระดาษ หรือสแกน QR จากบัตรสมาชิก LINE → ตรวจแล้วจองไว้กับบิลนี้ · ตัดเป็นใช้แล้วตอนบันทึกบิล
@@ -115,13 +119,15 @@ export default function (r) {
   // ยกเลิกการแลกแต้ม (คูปองจากการแลกที่ยังไม่ใช้) → คืนแต้มเข้าก้อนเดิม และถอดออกจากบิล
   r.post('/api/pos/coupons/cancel-redeem', async (req, body) => {
     const t = await posTerminal(req);
-    return tx((db) => core.cancelRedeem(db, { memberId: memberOf(body), couponId: body.couponId, by: { type: 'pos', id: t.terminalId } }));
+    const memberId = await memberOf(body);
+    return tx((db) => core.cancelRedeem(db, { memberId, couponId: body.couponId, by: { type: 'pos', id: t.terminalId } }));
   }, (b, out) => 'ยกเลิกการแลก คืน ' + (out?.restored ?? 0) + ' แต้ม');
   r.post('/api/pos/redeem', async (req, body) => {
     const t = await posTerminal(req);
     if (body.mode === 'staff') throw new HttpError(403, 'redeem_in_line', 'ให้ลูกค้าแลกแต้มในบัตรสมาชิก LINE แล้วสแกน QR คูปอง');
     if (!body.ref) throw bad('ref_required', 'ต้องมีรหัสบิลที่กำลังเปิด');
-    return tx((db) => core.redeemAtPos(db, { memberId: memberOf(body), brandId: t.brandId, rewardId: body.rewardId, ref: String(body.ref), subtotal: body.subtotal, minutes: Number(body.minutes) || 30, items: body.items }));
+    const memberId = await memberOf(body);
+    return tx((db) => core.redeemAtPos(db, { memberId, brandId: t.brandId, rewardId: body.rewardId, ref: String(body.ref), subtotal: body.subtotal, minutes: Number(body.minutes) || 30, items: body.items }));
   }, (b, out) => 'แลกแต้ม คงเหลือ ' + (out?.balance ?? ''));
   r.post('/api/pos/members/verify/send', async (req, body) => {
     const t = await posTerminal(req);
@@ -137,7 +143,7 @@ export default function (r) {
     // จำการล็อกอินในมือถือลูกค้าได้กี่วัน (หลังบ้าน POS > เมนูสมาชิก) · ไม่ส่งมา = 1 ชั่วโมงเหมือนเดิม · สูงสุด 90 วัน
     const days = Math.min(90, Math.max(0, parseInt(body.days, 10) || 0));
     const ttl = days ? days * 86400 : 3600;
-    return { verifyToken: signToken({ vm: id }, ttl), expiresIn: ttl };
+    return { verifyToken: signToken({ vm: id, mt: await memberStamp(id) }, ttl), expiresIn: ttl };
   });
 
   r.post('/api/pos/refunds', async (req, body) => {
