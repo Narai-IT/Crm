@@ -618,6 +618,11 @@ t('ของรางวัล: แบบคูปอง · จำกัดร�
   assert.equal((await mods.db.one('SELECT template_id FROM member_coupons WHERE id = $1', [r1.data.couponId])).template_id, tpl.id);
   assert.equal((await redeem(cp.data.id, 'rw-cp-2')).status, 409);
   assert.equal((await list()).find((r) => r.id === cp.data.id).why, 'แลกครบ 1 ครั้งในวันนี้');
+  // หน้าบัตรสมาชิกแสดง "แลกได้ 1 ครั้ง/คน/วัน" — API ต้องส่งค่าจำกัดมาด้วย
+  const cpRow = (await list()).find((r) => r.id === cp.data.id);
+  assert.equal(cpRow.limit_count, 1);
+  assert.equal(cpRow.limit_period, 'day');
+  assert.ok('stock' in cpRow);
 
   // เฉพาะ Gold/Platinum: สมาชิก Silver เห็นเหตุผล แลกไม่ได้
   const gold = await call('POST', '/api/admin/rewards', { brand: 'humlai', name: 'ของ Gold', cost: 10, value: 20, tiers: ['GOLD', 'PLATINUM'] }, adm);

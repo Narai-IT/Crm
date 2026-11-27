@@ -108,7 +108,9 @@ export default function (r) {
     const list = await core.rewardsFor({ q, one }, { brandId: url.searchParams.get('brand'), memberId: m ? m.id : null });
     return list.map((r) => ({ id: r.id, brand_id: r.brand_id, kind: r.kind, name: r.name, category: r.category, points_cost: r.points_cost, stock: r.stock,
       description: r.description, image: r.image_id ? '/api/public/coupon-images/' + r.image_id : null, discount_type: r.discount_type, discount_value: r.discount_value,
-      min_spend: r.min_spend, valid_days: r.valid_days, endDay: r.end_day, why: r.why }));
+      min_spend: r.min_spend, valid_days: r.valid_days, endDay: r.end_day, why: r.why,
+      // จำกัดกี่ครั้งต่อคน (null = ไม่จำกัด) ต่อช่วง day/week/month/year/all — หน้าบัตรสมาชิกแสดงบนการ์ด
+      limit_count: r.limit_count, limit_period: r.limit_period }));
   });
 
   r.post('/api/liff/redemptions', async (req, body) => {
